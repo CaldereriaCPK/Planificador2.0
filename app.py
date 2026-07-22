@@ -111,6 +111,9 @@ READY_TO_ARCHIVE_TASK_BACKGROUND = '#D9D9D9'
 AUTO_RECEIVING_PHASE = 'preparar material'
 DEFAULT_INITIAL_PHASE_HOURS = {}
 NEW_PROJECT_EXCLUDED_PHASES = {'verificar'}
+PLANNING_CALENDAR_PAST_DAYS = 7
+PLANNING_CALENDAR_FUTURE_DAYS = 120
+PLANNING_PDF_FUTURE_DAYS = 90
 
 
 def _ensure_default_initial_phases(project):
@@ -6178,8 +6181,8 @@ def calendar_view():
     _sort_cell_tasks(schedule)
 
     points = split_markers(schedule)
-    start = today - timedelta(days=30)
-    end = today + timedelta(days=120)
+    start = today - timedelta(days=PLANNING_CALENDAR_PAST_DAYS)
+    end = today + timedelta(days=PLANNING_CALENDAR_FUTURE_DAYS)
     days, cols, week_spans = build_calendar(start, end)
     hours_map = load_daily_hours()
     worker_day_overrides = load_worker_day_hours()
@@ -9917,11 +9920,11 @@ def complete():
     today = local_today()
     pdf_range = request.args.get('pdf_range')
     if request.args.get('pdf') and pdf_range == 'prev3':
-        start = today - timedelta(days=7)
-        end = today + timedelta(days=90)
+        start = today - timedelta(days=PLANNING_CALENDAR_PAST_DAYS)
+        end = today + timedelta(days=PLANNING_PDF_FUTURE_DAYS)
     else:
-        start = today - timedelta(days=30)
-        end = today + timedelta(days=120)
+        start = today - timedelta(days=PLANNING_CALENDAR_PAST_DAYS)
+        end = today + timedelta(days=PLANNING_CALENDAR_FUTURE_DAYS)
     days, cols, week_spans = build_calendar(start, end)
     hours_map = load_daily_hours()
     worker_day_overrides = load_worker_day_hours()
