@@ -1100,6 +1100,7 @@ def inject_archived_tasks(schedule):
 def build_schedule_with_archived(projects, include_optional_phases=True):
     """Return schedule/conflicts with archived tasks preloaded."""
 
+    projects = [p for p in (projects or []) if not is_ready_to_archive_project(p)]
     base_schedule = {}
     archived_entries, archived_project_map = inject_archived_tasks(base_schedule)
     if not include_optional_phases:
@@ -5441,6 +5442,14 @@ def _strip_optional_phases(projects, include_optional=True):
     return cleaned
 
 
+def is_ready_to_archive_project(project):
+    """Return True when a Kanbanize project is in Ready to Archive."""
+
+    if not isinstance(project, dict):
+        return False
+    return normalize_key(project.get('kanban_column')) == READY_TO_ARCHIVE_COLUMN
+
+
 def filter_visible_projects(projects):
     """Filter *projects* down to those with at least one phase with hours."""
 
@@ -5449,6 +5458,8 @@ def filter_visible_projects(projects):
         if not project_has_hours(p):
             continue
         if p.get('kanban_archived'):
+            continue
+        if is_ready_to_archive_project(p):
             continue
         visible.append(p)
     return visible
