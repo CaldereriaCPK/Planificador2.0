@@ -1,0 +1,152 @@
+/* Estilos específicos para la exportación PDF (wkhtmltopdf) */
+.pdf-export {
+  font-family: Arial, sans-serif;
+  font-size: 12px;
+  color: #000;
+}
+
+/* Estructura principal sin flex */
+.pdf-export .pedidos-wrapper {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  border-spacing: 16px 0;
+}
+
+.pdf-export .pedidos-calendar-stack,
+.pdf-export .columna-1 {
+  display: table-cell;
+  vertical-align: top;
+}
+
+.pdf-export .pedidos-calendar-stack {
+  width: 65%;
+}
+
+.pdf-export .columna-1 {
+  width: 35%;
+}
+
+.pdf-export .pedidos-calendar-stack > h2 {
+  margin: 0 0 8px 0;
+}
+
+/* Calendarios: tablas fijas y sin flex anidados */
+.pdf-export .pedidos-calendar-container {
+  display: block;
+  width: 100%;
+}
+
+.pdf-export .pedidos-calendar-container .pedidos-calendar {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.pdf-export .pedidos-calendar-container th,
+.pdf-export .pedidos-calendar-container td {
+  border: 1px solid #ccc;
+  padding: 4px;
+  vertical-align: top;
+}
+
+.pdf-export .pedidos-calendar-container .week-header,
+.pdf-export .pedidos-calendar-container .day-header,
+.pdf-export .pedidos-calendar-container .unconfirmed-header {
+  background: #f3f3f3;
+  font-weight: 700;
+}
+
+.pdf-export .pedidos-calendar-container .task {
+  display: block;
+  margin-bottom: 4px;
+  padding: 2px 4px;
+  border: 2px solid #999;
+  background: #fff;
+  page-break-inside: avoid;
+}
+
+/* Columna 1 con anchos fijos compatibles */
+.pdf-export .columna-1-table-wrapper {
+  max-width: none;
+  overflow: visible;
+}
+
+.pdf-export .columna-1-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.pdf-export .columna-1-table col[data-col-key="project"] { width: 280px; }
+.pdf-export .columna-1-table col[data-col-key="due"] { width: 120px; }
+.pdf-export .columna-1-table col[data-col-key="start"] { width: 140px; }
+.pdf-export .columna-1-table col[data-col-key="order-date"] { width: 140px; }
+.pdf-export .columna-1-table col[data-col-key="order-count"] { width: 110px; }
+.pdf-export .columna-1-table col[data-col-key="links"] { width: 200px; }
+.pdf-export .columna-1-table col[data-col-key="observations"] { width: 200px; }
+
+.pdf-export .columna-1-table th,
+.pdf-export .columna-1-table td {
+  border: 1px solid #ccc;
+  padding: 6px 8px;
+  vertical-align: top;
+  background: #fff;
+}
+
+.pdf-export .columna-1-table th {
+  background: #f3f3f3;
+  font-weight: 700;
+}
+
+.pdf-export .columna-1 .proj-title {
+  display: block;
+  font-size: 13px;
+}
+
+.pdf-export .columna-1 .proj-code-badge {
+  display: inline-block;
+  padding: 2px 4px;
+  margin-right: 4px;
+  border: 1px solid currentColor;
+  font-size: 11px;
+}
+
+/* Evitar cortes incómodos dentro de tarjetas y filas */
+.pdf-export .task,
+.pdf-export .project-row {
+  page-break-inside: avoid;
+}
+
+.pdf-export .columna-1-table tr {
+  page-break-inside: avoid;
+}
+
+@media print {
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body * {
+    visibility: visible !important;
+  }
+
+  .tab-content,
+  .tab-pane,
+  .pdf-section,
+  .container,
+  .content {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+    position: static !important;
+  }
+
+  .row,
+  .col,
+  [class*="col-"] {
+    float: none !important;
+    width: 100% !important;
+  }
+}

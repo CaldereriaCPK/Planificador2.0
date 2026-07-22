@@ -1,0 +1,86 @@
+body.pdf-doc {
+  font-family: "Helvetica", "Arial", sans-serif;
+  font-size: 11pt;
+  color: #111;
+  background: #fff;
+}
+
+h1, h2 {
+  margin: 0 0 12px 0;
+}
+
+h1 {
+  font-size: 18pt;
+}
+
+h2 {
+  font-size: 14pt;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #333;
+}
+
+.pdf-page {
+  page-break-after: always;
+  page-break-inside: avoid;
+}
+
+.pdf-page:last-child {
+  page-break-after: auto;
+}
+
+.meta-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+.meta-table th,
+.meta-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid #444;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 14px;
+}
+
+.data-table th,
+.data-table td {
+  border: 1px solid #444;
+  padding: 6px 8px;
+  vertical-align: top;
+}
+
+.data-table thead th {
+  background: #f2f2f2;
+}
+
+.data-table tbody tr {
+  page-break-inside: avoid;
+}
+
+.col-date {
+  width: 16%;
+}
+
+.col-project {
+  width: 34%;
+}
+
+.col-phase {
+  width: 30%;
+}
+
+.col-hours {
+  width: 10%;
+  text-align: right;
+}
+
+.empty-row {
+  text-align: center;
+  font-style: italic;
+  color: #555;
+}
