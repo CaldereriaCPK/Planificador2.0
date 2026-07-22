@@ -4734,6 +4734,7 @@ def move_phase_date(
     skip_block=False,
     start_hour=None,
     track=None,
+    initial_mapping=None,
 ):
     """Move ``phase`` of project ``pid`` so it starts on ``new_date``.
 
@@ -4760,7 +4761,11 @@ def move_phase_date(
         except Exception:
             part = None
 
-    mapping = compute_schedule_map(projects)
+    mapping = (
+        initial_mapping
+        if initial_mapping is not None
+        else compute_schedule_map(projects)
+    )
     tasks = [t for t in mapping.get(pid, []) if t[2] == phase]
     if not tasks:
         return _fail('Fase no encontrada')
@@ -4913,6 +4918,9 @@ def move_phase_date(
         current_day = end_day
         current_hour = end_hour
 
+        # Push mode needs a fresh map after inserting the moved phase so the
+        # subsequent tasks can be discovered in their updated order. Split mode
+        # does not need this second full schedule calculation.
         mapping = compute_schedule_map(projects)
         start_push = sched_day if push_same_day else next_workday(target_day)
         if push_from:
@@ -5074,8 +5082,22 @@ def move_phase_date(
             if end_hour >= limit:
                 end_day = next_workday(end_day)
                 end_hour = 0
+    actual_worker = worker
+    if not actual_worker:
+        if part is None and not isinstance(proj['phases'].get(phase), list):
+            actual_worker = proj.get('assigned', {}).get(phase)
+        else:
+            workers = proj.get('segment_workers', {}).get(phase, [])
+            idx = part if part is not None else 0
+            if idx < len(workers):
+                actual_worker = workers[idx]
+            if not actual_worker:
+                actual_worker = proj.get('assigned', {}).get(phase)
+
     info = {
         'start_hour': sched_hour,
+        'actual_day': sched_day.isoformat(),
+        'actual_worker': actual_worker,
         'end_day': end_day.isoformat() if 'end_day' in locals() else sched_day.isoformat(),
         'end_hour': end_hour if 'end_hour' in locals() else sched_hour,
         'affected': track or [],
@@ -10970,6 +10992,7 @@ def move_phase():
         skip_block=skip_block,
         start_hour=start_hour,
         track=tracker_events,
+        initial_mapping=before_mapping,
     )
     if new_day is None:
         if isinstance(warn, dict):
@@ -10979,8 +11002,12 @@ def move_phase():
     # Revert move if the target day is already full and the phase was
     # scheduled elsewhere. This prevents the phase from jumping to the next
     # available day when the chosen cell has no remaining hours.
-    mapping = compute_schedule_map(projects)
-    actual_day, actual_worker = _find_phase_entry(mapping)
+    actual_day = (info or {}).get('actual_day') if isinstance(info, dict) else None
+    actual_worker = (info or {}).get('actual_worker') if isinstance(info, dict) else None
+    if not actual_day or not actual_worker:
+        # Fallback for legacy callers that may not populate location metadata.
+        mapping = compute_schedule_map(projects)
+        actual_day, actual_worker = _find_phase_entry(mapping)
     target_worker = worker or actual_worker or before_worker
     worker_limit = HOURS_LIMITS.get(target_worker, HOURS_PER_DAY)
     unlimited_worker = isinstance(worker_limit, (int, float)) and math.isinf(float(worker_limit))
