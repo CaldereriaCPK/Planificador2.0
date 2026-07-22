@@ -1154,12 +1154,6 @@ tr.collapsed td:not(:first-child) { display: none; }
     padding: 10px 20px;
 }
 
-.bugs-table thead th {
-    position: sticky;
-    top: 0;
-    background: #fff;
-    z-index: 10;
-}
 .kanban-table thead th {
     position: sticky;
     top: 0;
