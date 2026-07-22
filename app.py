@@ -34,6 +34,7 @@ import random
 from queue import Queue
 import threading
 import math
+import hashlib
 
 from localtime import local_today, local_now
 
@@ -844,6 +845,7 @@ def save_archived_calendar_entries(entries):
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(ARCHIVED_CALENDAR_FILE, 'w') as fh:
         json.dump(entries or [], fh)
+    invalidate_planning_calendar_cache()
 
 
 def store_archived_calendar_entry(entry):
@@ -1815,6 +1817,136 @@ else:
 
     def save_worker_day_hours(data):
         return {}
+
+_PLANNING_CALENDAR_CACHE = {}
+_PLANNING_CALENDAR_CACHE_LOCK = threading.Lock()
+_PLANNING_CALENDAR_CACHE_VERSION = 0
+
+
+def invalidate_planning_calendar_cache():
+    """Invalidate cached planning-calendar data after scheduling changes."""
+    global _PLANNING_CALENDAR_CACHE_VERSION
+    with _PLANNING_CALENDAR_CACHE_LOCK:
+        _PLANNING_CALENDAR_CACHE_VERSION += 1
+        _PLANNING_CALENDAR_CACHE.clear()
+
+
+_raw_save_projects = save_projects
+_raw_save_vacations = save_vacations
+_raw_save_daily_hours = save_daily_hours
+_raw_save_worker_day_hours = save_worker_day_hours
+_raw_save_manual_unplanned = save_manual_unplanned
+_raw_save_inactive_workers = save_inactive_workers
+_raw_save_inactive_worker_dates = save_inactive_worker_dates
+
+
+def save_projects(projects):
+    result = _raw_save_projects(projects)
+    invalidate_planning_calendar_cache()
+    return result
+
+
+def save_vacations(vacations):
+    result = _raw_save_vacations(vacations)
+    invalidate_planning_calendar_cache()
+    return result
+
+
+def save_daily_hours(hours):
+    result = _raw_save_daily_hours(hours)
+    invalidate_planning_calendar_cache()
+    return result
+
+
+def save_worker_day_hours(data):
+    result = _raw_save_worker_day_hours(data)
+    invalidate_planning_calendar_cache()
+    return result
+
+
+def save_manual_unplanned(entries):
+    result = _raw_save_manual_unplanned(entries)
+    invalidate_planning_calendar_cache()
+    return result
+
+
+def save_inactive_workers(workers):
+    result = _raw_save_inactive_workers(workers)
+    invalidate_planning_calendar_cache()
+    return result
+
+
+def save_inactive_worker_dates(data):
+    result = _raw_save_inactive_worker_dates(data)
+    invalidate_planning_calendar_cache()
+    return result
+
+
+def _planning_cache_file_signature(path):
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _planning_projects_digest(projects):
+    payload = json.dumps(projects or [], sort_keys=True, default=str, ensure_ascii=False)
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+
+def planning_calendar_cache_key(projects, include_optional_phases):
+    """Build a cache key for the initial planning calendar workload."""
+    paths = (
+        _schedule_mod.PROJECTS_FILE,
+        _schedule_mod.VACATIONS_FILE,
+        _schedule_mod.DAILY_HOURS_FILE,
+        _schedule_mod.WORKER_DAY_HOURS_FILE,
+        ARCHIVED_CALENDAR_FILE,
+        _schedule_mod.MANUAL_UNPLANNED_FILE,
+        getattr(_schedule_mod, 'INACTIVE_WORKERS_FILE', ''),
+        getattr(_schedule_mod, 'INACTIVE_WORKER_DATES_FILE', ''),
+    )
+    file_signatures = tuple(
+        (path, _planning_cache_file_signature(path))
+        for path in paths
+        if path
+    )
+    return (
+        _PLANNING_CALENDAR_CACHE_VERSION,
+        bool(include_optional_phases),
+        tuple(sorted(OPTIONAL_PHASES)),
+        _planning_projects_digest(projects),
+        file_signatures,
+    )
+
+
+def cached_build_schedule_with_archived(projects, include_optional_phases=True):
+    key = ('schedule_with_archived', planning_calendar_cache_key(projects, include_optional_phases))
+    with _PLANNING_CALENDAR_CACHE_LOCK:
+        cached = _PLANNING_CALENDAR_CACHE.get(key)
+        if cached is not None:
+            return copy.deepcopy(cached)
+    result = build_schedule_with_archived(
+        projects,
+        include_optional_phases=include_optional_phases,
+    )
+    with _PLANNING_CALENDAR_CACHE_LOCK:
+        _PLANNING_CALENDAR_CACHE[key] = copy.deepcopy(result)
+    return copy.deepcopy(result)
+
+
+def cached_phase_start_map(projects, include_optional_phases=True):
+    key = ('phase_start_map', planning_calendar_cache_key(projects, include_optional_phases))
+    with _PLANNING_CALENDAR_CACHE_LOCK:
+        cached = _PLANNING_CALENDAR_CACHE.get(key)
+        if cached is not None:
+            return copy.deepcopy(cached)
+    result = phase_start_map(projects)
+    with _PLANNING_CALENDAR_CACHE_LOCK:
+        _PLANNING_CALENDAR_CACHE[key] = copy.deepcopy(result)
+    return copy.deepcopy(result)
+
 
 KANBAN_POPUP_FIELDS = [
     'Fecha Cliente',
@@ -5902,7 +6034,7 @@ def calendar_view():
     projects = [p for p in projects if project_has_hours(p) and not p.get('kanban_archived')]
     if archive_ready_to_archive_projects_if_due(projects, today=local_today()):
         save_projects(projects)
-    schedule, conflicts, _archived_entries, archived_project_map = build_schedule_with_archived(
+    schedule, conflicts, _archived_entries, archived_project_map = cached_build_schedule_with_archived(
         projects, include_optional_phases=include_optional_phases
     )
     annotate_schedule_frozen_background(schedule)
@@ -6208,7 +6340,7 @@ def calendar_view():
         info['material_missing_titles'] = material_missing_map.get(str(pid), [])
         project_map[pid] = info
         project_map[str(pid)] = info
-    start_map = phase_start_map(projects)
+    start_map = cached_phase_start_map(projects, include_optional_phases=include_optional_phases)
     project_orders = build_project_order_popup_map(projects, today=today)
     complete_project_phases = [ph for ph in PHASE_ORDER if ph not in ['dibujo', 'pedidos']]
     if 'lanzamiento' not in complete_project_phases:
@@ -9599,7 +9731,7 @@ def taller_view():
 def complete():
     include_optional_phases = optional_phases_enabled()
     projects = get_visible_projects(include_optional_phases=include_optional_phases)
-    schedule, conflicts, _archived_entries, archived_project_map = build_schedule_with_archived(
+    schedule, conflicts, _archived_entries, archived_project_map = cached_build_schedule_with_archived(
         projects, include_optional_phases=include_optional_phases
     )
     annotate_schedule_frozen_background(schedule)
@@ -9941,7 +10073,7 @@ def complete():
         info['material_missing_titles'] = material_missing_map.get(str(pid), [])
         project_map[pid] = info
         project_map[str(pid)] = info
-    start_map = phase_start_map(projects)
+    start_map = cached_phase_start_map(projects, include_optional_phases=include_optional_phases)
     project_orders = build_project_order_popup_map(projects, today=today)
     orders_summary = build_complete_orders_summary(today)
     for row in filtered_projects:
@@ -11078,6 +11210,7 @@ def move_phase():
     }
     if warn and not ack_warning:
         resp['warning'] = warn
+    invalidate_planning_calendar_cache()
     return jsonify(resp)
 
 
