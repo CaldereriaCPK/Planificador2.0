@@ -1529,11 +1529,63 @@
   ensurePedidosLinks();
 
   let pendingBlock = null;
-  function afterMove(data, originalDate) {
+  function _applyMoveWithoutReload(data, targetWorker) {
+    if (!draggedTaskElement) return false;
+    const moved = draggedTaskElement;
+    const worker = (targetWorker || '').trim();
+    if (!worker) return false;
+
+    const previousRow = moved.closest('tr[data-worker]');
+    const previousWorker = previousRow ? previousRow.dataset.worker : '';
+    const previousDate = moved.dataset.day || '';
+    const updateMovedTask = () => {
+      moved.dataset.day = data.date || '';
+      moved.classList.add('moved');
+      moved.classList.remove('drag-over');
+    };
+
+    if (worker === 'Sin planificar') {
+      const manualBucket = data.manual_bucket || moved.classList.contains('manual-task') || (dragInfo && dragInfo.manual);
+      const targetContainer = manualBucket
+        ? document.getElementById('manual-dropzone')
+        : Array.from(document.querySelectorAll('.unplanned-list[data-worker="Sin planificar"]'))
+          .find(el => el.style.display !== 'none');
+      if (!targetContainer) return false;
+      updateMovedTask();
+      if (targetContainer.id === 'manual-dropzone') {
+        moved.classList.add('manual-task');
+        const placeholder = targetContainer.querySelector('.manual-placeholder');
+        if (placeholder) placeholder.style.display = 'none';
+      } else {
+        moved.classList.remove('manual-task');
+      }
+      targetContainer.appendChild(moved);
+      if (previousWorker && previousDate) recomputeWorkerDayCell(previousWorker, previousDate);
+      return true;
+    }
+
+    const targetRow = Array.from(document.querySelectorAll('tr[data-worker]')).find(r => (r.dataset.worker || '').trim() === worker);
+    if (!targetRow) return false;
+    const targetCell = targetRow.querySelector(`td[data-date="${data.date}"]`);
+    if (!targetCell) return false;
+    updateMovedTask();
+    moved.classList.remove('manual-task');
+    targetCell.appendChild(moved);
+    if (previousWorker && previousDate) recomputeWorkerDayCell(previousWorker, previousDate);
+    recomputeWorkerDayCell(worker, data.date);
+    return true;
+  }
+
+  function afterMove(data, originalDate, targetWorker = '') {
     localStorage.setItem(LAST_KEY, JSON.stringify({pid: data.pid, phase: data.phase, part: data.part, date: data.date}));
     localStorage.setItem(TALLER_REFRESH_KEY, String(Date.now()));
     if (data.date !== originalDate) localStorage.setItem(SCROLL_KEY2, data.date);
     const finalize = () => {
+      if (_applyMoveWithoutReload(data, targetWorker)) {
+        draggedTaskElement = null;
+        dragInfo = null;
+        return;
+      }
       location.reload();
     };
     if (Object.prototype.hasOwnProperty.call(data, 'material_blockers')) {
@@ -2339,7 +2391,7 @@ let draggedTaskElement = null;
       draggedTaskElement = t;
       e.dataTransfer.setData('text/plain', JSON.stringify({pid: t.dataset.pid, phase: t.dataset.phase, part: partValue}));
     });
-    t.addEventListener('dragend', () => { dragInfo = null; draggedTaskElement = null; });
+    t.addEventListener('dragend', () => { dragInfo = null; });
     t.addEventListener('click', (e) => {
       if (t.classList.contains('deactivated')) return;
       e.stopPropagation();
@@ -2782,7 +2834,7 @@ let draggedTaskElement = null;
                 alert(data.error || 'Error');
                 return;
               }
-              afterMove(data, today);
+              afterMove(data, today, 'Sin planificar');
             });
         });
       }
@@ -3162,7 +3214,7 @@ let draggedTaskElement = null;
               return;
             }
             sessionStorage.removeItem('undoMove');
-            afterMove(data, req.date);
+            afterMove(data, req.date, req.worker);
           });
       }
     }
@@ -3254,7 +3306,7 @@ let draggedTaskElement = null;
         alert(data.error || 'Error');
         return;
       }
-      afterMove(data, moveData.date);
+      afterMove(data, moveData.date, moveData.worker);
     });
   }
   if (blockUnfreeze) {
@@ -3304,7 +3356,7 @@ let draggedTaskElement = null;
             alert(data.error || 'Error');
             return;
           }
-          afterMove(data, today);
+          afterMove(data, today, 'Sin planificar');
         });
     });
   });
@@ -3436,7 +3488,7 @@ let draggedTaskElement = null;
             alert(moveData.error || 'Error');
             return;
           }
-          afterMove(moveData, today);
+          afterMove(moveData, today, 'Sin planificar');
         });
     });
   }
