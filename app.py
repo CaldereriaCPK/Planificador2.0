@@ -5284,6 +5284,84 @@ def _strip_optional_phases(projects, include_optional=True):
     return cleaned
 
 
+
+_CALENDAR_SCHEDULE_CACHE = {}
+_CALENDAR_SCHEDULE_CACHE_LOCK = threading.Lock()
+
+
+def _calendar_schedule_cache_files():
+    """Return data files whose mtimes affect the main calendar planning."""
+
+    file_attrs = (
+        'PROJECTS_FILE',
+        'VACATIONS_FILE',
+        'DAILY_HOURS_FILE',
+        'WORKER_HOURS_FILE',
+        'WORKER_DAY_HOURS_FILE',
+        'MANUAL_UNPLANNED_FILE',
+        'PHASE_HISTORY_FILE',
+        'INACTIVE_WORKERS_FILE',
+        'INACTIVE_WORKER_DATES_FILE',
+        'EXTRA_WORKERS_FILE',
+        'WORKER_ORDER_FILE',
+        'WORKER_RENAMES_FILE',
+        'DELETED_WORKERS_FILE',
+    )
+    files = [getattr(_schedule_mod, attr, None) for attr in file_attrs]
+    files.extend([
+        ARCHIVED_CALENDAR_FILE,
+        PLANNER_SETTINGS_FILE,
+        KANBAN_CARDS_FILE,
+    ])
+    return tuple(path for path in files if path)
+
+
+def _calendar_schedule_cache_key(include_optional_phases):
+    """Build a cache key from relevant planning files and optional-phase mode."""
+
+    file_state = []
+    for path in _calendar_schedule_cache_files():
+        try:
+            stat = os.stat(path)
+            file_state.append((path, stat.st_mtime_ns, stat.st_size))
+        except FileNotFoundError:
+            file_state.append((path, None, None))
+    return (bool(include_optional_phases), tuple(file_state))
+
+
+def clear_calendar_schedule_cache():
+    """Clear the in-process calendar schedule cache."""
+
+    with _CALENDAR_SCHEDULE_CACHE_LOCK:
+        _CALENDAR_SCHEDULE_CACHE.clear()
+
+
+def get_cached_calendar_schedule(include_optional_phases):
+    """Return cached schedule data for ``/calendar`` with defensive copies."""
+
+    cache_key = _calendar_schedule_cache_key(include_optional_phases)
+    with _CALENDAR_SCHEDULE_CACHE_LOCK:
+        cached = _CALENDAR_SCHEDULE_CACHE.get(cache_key)
+        if cached is not None:
+            return copy.deepcopy(cached)
+
+    projects = get_projects()
+    projects = _strip_optional_phases(projects, include_optional=include_optional_phases)
+    projects = [p for p in projects if project_has_hours(p) and not p.get('kanban_archived')]
+    if archive_ready_to_archive_projects_if_due(projects, today=local_today()):
+        save_projects(projects)
+    schedule, conflicts, archived_entries, archived_project_map = build_schedule_with_archived(
+        projects, include_optional_phases=include_optional_phases
+    )
+    annotate_schedule_frozen_background(schedule)
+    result = (projects, schedule, conflicts, archived_entries, archived_project_map)
+
+    with _CALENDAR_SCHEDULE_CACHE_LOCK:
+        _CALENDAR_SCHEDULE_CACHE.clear()
+        _CALENDAR_SCHEDULE_CACHE[cache_key] = copy.deepcopy(result)
+    return copy.deepcopy(result)
+
+
 def filter_visible_projects(projects):
     """Filter *projects* down to those with at least one phase with hours."""
 
@@ -5875,15 +5953,9 @@ def home():
 @app.route('/calendar')
 def calendar_view():
     include_optional_phases = optional_phases_enabled()
-    projects = get_projects()
-    projects = _strip_optional_phases(projects, include_optional=include_optional_phases)
-    projects = [p for p in projects if project_has_hours(p) and not p.get('kanban_archived')]
-    if archive_ready_to_archive_projects_if_due(projects, today=local_today()):
-        save_projects(projects)
-    schedule, conflicts, _archived_entries, archived_project_map = build_schedule_with_archived(
-        projects, include_optional_phases=include_optional_phases
+    projects, schedule, conflicts, _archived_entries, archived_project_map = get_cached_calendar_schedule(
+        include_optional_phases
     )
-    annotate_schedule_frozen_background(schedule)
     today = local_today()
     worker_notes_raw = load_worker_notes()
     manual_entries = load_manual_bucket_entries()
