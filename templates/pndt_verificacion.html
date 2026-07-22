@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Pdte. Verificación</h2>
+<table class="pending-verification-table">
+    <thead>
+        <tr>
+            <th>Tarjeta</th>
+            <th>Fecha inicio planificada</th>
+            <th>Proyecto</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% if rows %}
+        {% for row in rows %}
+        <tr>
+            <td>{{ row.title }}</td>
+            <td class="pending-date">{{ row.planned_date }}</td>
+            <td class="pending-project">
+                {% if row.project_title %}
+                <div class="pending-project-title">{{ row.project_title }}</div>
+                {% endif %}
+                {% if row.project_description %}
+                <div class="pending-project-description">{{ row.project_description }}</div>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    {% else %}
+        <tr>
+            <td colspan="3">No hay tarjetas en “Pdte. Verificación”.</td>
+        </tr>
+    {% endif %}
+    </tbody>
+</table>
+{% endblock %}

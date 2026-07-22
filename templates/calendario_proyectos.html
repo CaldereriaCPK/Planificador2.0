@@ -1,0 +1,232 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="project-calendar-toolbar">
+  <button type="button" id="filter-lanzamientos" class="toolbar-btn" aria-pressed="false">Lanzamientos</button>
+  <input type="text" id="project-search" class="toolbar-input" placeholder="Filtrar proyectos (escribe aquí)">
+  <button type="button" id="filter-delayed" class="toolbar-btn" aria-pressed="false">Filtrar proyectos atrasados</button>
+  <button type="button" id="jump-today" class="toolbar-btn">HOY</button>
+</div>
+
+<div class="project-calendar-layout" id="project-calendar-layout">
+  <aside class="project-calendar-sidebar" id="project-calendar-sidebar">
+    <h2>Proyectos activos (Kanbanize)</h2>
+    <ul id="project-calendar-list" class="project-calendar-list">
+      {% for project in projects %}
+      <li data-title="{{ (project.title or '')|lower }}" data-client="{{ (project.client or '')|lower }}" data-delayed="{{ '1' if project.is_delayed else '0' }}" data-lanzamiento="{{ '1' if project.has_lanzamiento else '0' }}">
+        <button type="button" class="project-calendar-item" data-payload='{{ project|tojson|safe }}'>
+          <strong>{{ project.title }}</strong><br>
+          <span>{{ project.client }}</span>
+        </button>
+      </li>
+      {% endfor %}
+    </ul>
+  </aside>
+
+  <div id="sidebar-resizer" class="sidebar-resizer" aria-hidden="true"></div>
+
+  <section class="project-calendar-main">
+    <div class="project-calendar-empty" id="project-calendar-empty">Selecciona un proyecto para marcar sus fechas en el calendario.</div>
+    <div id="project-calendar-months" class="project-calendar-months">
+      {% for month in month_meta %}
+      <div class="project-month{% if month.start == today_iso[:7] ~ "-01" %} current-month{% endif %}" data-month-start="{{ month.start }}" data-month-end="{{ month.end }}">
+        <div class="project-month-label">{{ month.label }}</div>
+        <div class="project-month-grid-head">
+          <span>L</span><span>M</span><span>X</span><span>J</span><span>V</span><span>S</span><span>D</span>
+        </div>
+        <div class="project-month-grid">
+          {% for week in month.weeks %}
+            {% for cell in week %}
+              <div class="project-day-cell{% if not cell.date %} empty{% endif %}{% if cell.date == today_iso %} today-cell{% endif %}" {% if cell.date %}data-date="{{ cell.date }}"{% endif %}>
+                {% if cell.date %}
+                <div class="project-day-number">{{ cell.day }}</div>
+                <div class="project-day-labels"></div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+
+<style>
+.project-calendar-toolbar { display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+.toolbar-btn { border:1px solid #777; background:#fff; border-radius:6px; padding:7px 12px; cursor:pointer; }
+.toolbar-btn.active { background:#6c47ff; color:#fff; border-color:#5a39dc; }
+.toolbar-input { min-width:280px; padding:7px 10px; border:1px solid #999; border-radius:6px; }
+
+.project-calendar-layout { display:inline-flex; gap:0; align-items:stretch; max-width: 96%; }
+.project-calendar-sidebar { width: 320px; min-width:220px; max-width:55vw; max-height: 82vh; overflow:auto; border:1px solid #ddd; border-radius:8px 0 0 8px; padding:10px; }
+.sidebar-resizer { width:8px; cursor:col-resize; background:linear-gradient(180deg,#efefef,#d9d9d9); border-top:1px solid #ddd; border-bottom:1px solid #ddd; }
+.project-calendar-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
+.project-calendar-item { width:100%; text-align:left; border:1px solid #ccc; background:#fff; border-radius:6px; padding:8px; cursor:pointer; }
+.project-calendar-item.active { border-color:#6c47ff; background:#efe9ff; }
+.project-calendar-main { flex:0 0 auto; width: 920px; border:1px solid #ddd; border-left:none; border-radius:0 8px 8px 0; padding:10px; }
+.project-calendar-empty { color:#666; margin-bottom:12px; }
+.project-calendar-months { display:flex; flex-direction:column; gap:18px; max-height: 78vh; overflow-y: auto; padding-right: 6px; }
+.project-month { border:1px solid #ddd; border-radius:8px; padding:10px; }
+.project-month-label { font-weight:700; margin-bottom:8px; }
+.project-month-grid-head { display:grid; grid-template-columns: repeat(7, minmax(0,1fr)); gap:6px; margin-bottom:6px; font-size:12px; color:#555; }
+.project-month-grid { display:grid; grid-template-columns: repeat(7, minmax(0,1fr)); gap:6px; }
+.project-day-cell { min-height:50px; border:1px solid #ddd; border-radius:6px; background:#fff; padding:2px; }
+.project-day-cell.empty { background:#f7f7f7; border-style:dashed; }
+.project-day-number { font-size:12px; color:#444; font-weight:600; margin-bottom:4px; }
+.project-day-labels { display:flex; flex-wrap:wrap; gap:4px; align-content:flex-start; }
+.project-day-tag { display:inline-block; font-size:14px; line-height:1.2; padding:3px 8px; background:#e9defe; border:1px solid #b79dff; border-radius:999px; color:#3b2a8f; margin-bottom:3px; }
+.project-day-tag.client-date { color:#b00020; font-weight:700; background:#ffdfe3; border-color:#f0a8b3; }
+.project-day-tag.planned-date { color:#0b5e20; font-weight:700; background:#dbf4df; border-color:#9fd5a8; }
+.project-day-cell.client-hit { background:#fff; border-color:#ddd; }
+.project-day-cell.hit { background:#fff; border-color:#ddd; }
+.project-day-cell.today-cell { border: 3px solid #c00000; }
+</style>
+
+<script>
+(() => {
+  const list = document.getElementById('project-calendar-list');
+  const empty = document.getElementById('project-calendar-empty');
+  const delayedBtn = document.getElementById('filter-delayed');
+  const lanzBtn = document.getElementById('filter-lanzamientos');
+  const searchInput = document.getElementById('project-search');
+  const sidebar = document.getElementById('project-calendar-sidebar');
+  const resizer = document.getElementById('sidebar-resizer');
+  const todayBtn = document.getElementById('jump-today');
+  const TODAY_ISO = '{{ today_iso }}';
+  const monthsContainer = document.getElementById('project-calendar-months');
+  if (!list) return;
+
+  let delayedOnly = false;
+  let lanzamientoOnly = false;
+
+  function clearCalendarMarks() {
+    document.querySelectorAll('.project-day-cell.hit, .project-day-cell.client-hit').forEach((cell) => { cell.classList.remove('hit'); cell.classList.remove('client-hit'); });
+    document.querySelectorAll('.project-day-labels').forEach((box) => { box.innerHTML = ''; });
+  }
+
+  function renderProject(payload) {
+    clearCalendarMarks();
+    const dates = (payload && Array.isArray(payload.dates)) ? payload.dates : [];
+    if (!dates.length) {
+      empty.textContent = 'Este proyecto no tiene fechas para marcar.';
+      return;
+    }
+    empty.textContent = '';
+    dates.forEach((item) => {
+      const cell = document.querySelector(`.project-day-cell[data-date="${item.date}"]`);
+      if (!cell) return;
+      cell.classList.add('hit');
+      const labels = cell.querySelector('.project-day-labels');
+      if (!labels) return;
+      const tag = document.createElement('div');
+      tag.className = 'project-day-tag';
+      const normLabel = (item.label || '').trim().toLowerCase();
+      if (normLabel === 'fecha cliente') {
+        tag.classList.add('client-date');
+        cell.classList.add('client-hit');
+      }
+      if (normLabel === 'fecha de inicio planificado' || normLabel === 'fecha de fin planificado') {
+        tag.classList.add('planned-date');
+      }
+      tag.textContent = item.label;
+      labels.appendChild(tag);
+    });
+  }
+
+
+  function jumpToToday() {
+    const todayCell = document.querySelector(`.project-day-cell[data-date="${TODAY_ISO}"]`);
+    if (!todayCell) return;
+    todayCell.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    todayCell.classList.add('hit');
+    setTimeout(() => {
+      if (!todayCell.classList.contains('client-hit')) {
+        todayCell.classList.remove('hit');
+      }
+    }, 1600);
+  }
+
+
+  function scrollToCurrentMonth() {
+    if (!monthsContainer) return;
+    const current = monthsContainer.querySelector('.project-month.current-month');
+    if (!current) return;
+    monthsContainer.scrollTop = Math.max(0, current.offsetTop - 8);
+  }
+
+  function applyFilters() {
+    const q = (searchInput.value || '').trim().toLowerCase();
+    list.querySelectorAll('li').forEach((li) => {
+      const title = li.dataset.title || '';
+      const client = li.dataset.client || '';
+      const delayed = li.dataset.delayed === '1';
+      const hasLaunch = li.dataset.lanzamiento === '1';
+      const textMatch = !q || title.includes(q) || client.includes(q);
+      const delayedMatch = !delayedOnly || delayed;
+      const launchMatch = !lanzamientoOnly || hasLaunch;
+      li.style.display = (textMatch && delayedMatch && launchMatch) ? '' : 'none';
+    });
+  }
+
+  list.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.project-calendar-item');
+    if (!btn) return;
+    if (btn.closest('li') && btn.closest('li').style.display === 'none') return;
+    list.querySelectorAll('.project-calendar-item.active').forEach((el) => el.classList.remove('active'));
+    btn.classList.add('active');
+    try {
+      renderProject(JSON.parse(btn.dataset.payload || '{}'));
+    } catch (_err) {
+      clearCalendarMarks();
+      empty.textContent = 'No se pudo cargar este proyecto.';
+    }
+  });
+
+  delayedBtn.addEventListener('click', () => {
+    delayedOnly = !delayedOnly;
+    delayedBtn.classList.toggle('active', delayedOnly);
+    delayedBtn.setAttribute('aria-pressed', delayedOnly ? 'true' : 'false');
+    applyFilters();
+  });
+
+  lanzBtn.addEventListener('click', () => {
+    lanzamientoOnly = !lanzamientoOnly;
+    lanzBtn.classList.toggle('active', lanzamientoOnly);
+    lanzBtn.setAttribute('aria-pressed', lanzamientoOnly ? 'true' : 'false');
+    applyFilters();
+  });
+
+  searchInput.addEventListener('input', applyFilters);
+
+  if (todayBtn) {
+    todayBtn.addEventListener('click', jumpToToday);
+  }
+
+  const WIDTH_KEY = 'project-calendar-sidebar-width';
+  const stored = parseInt(localStorage.getItem(WIDTH_KEY) || '', 10);
+  if (Number.isFinite(stored) && stored >= 220) sidebar.style.width = `${stored}px`;
+
+  let resizing = false;
+  resizer.addEventListener('mousedown', (e) => {
+    resizing = true;
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!resizing) return;
+    const layoutLeft = document.getElementById('project-calendar-layout').getBoundingClientRect().left;
+    const next = Math.max(220, Math.min(window.innerWidth * 0.55, e.clientX - layoutLeft));
+    sidebar.style.width = `${next}px`;
+  });
+  window.addEventListener('mouseup', () => {
+    if (!resizing) return;
+    resizing = false;
+    const w = parseInt(sidebar.style.width || '320', 10);
+    if (Number.isFinite(w)) localStorage.setItem(WIDTH_KEY, String(w));
+  });
+
+  applyFilters();
+  scrollToCurrentMonth();
+  jumpToToday();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,295 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Proyectos</h2>
+<form method="get" class="controls">
+    <label>Proyecto: <input type="text" name="project" value="{{ project_filter }}"></label>
+    <label>Cliente: <input type="text" name="client" value="{{ client_filter }}"></label>
+    <label>Ordenar:
+        <select name="sort">
+            <option value="created" {% if sort_option == 'created' %}selected{% endif %}>Creación</option>
+            <option value="name" {% if sort_option == 'name' %}selected{% endif %}>Nombre</option>
+        </select>
+    </label>
+    <button type="submit">Filtrar</button>
+</form>
+<table class="projects-table">
+    <thead>
+    <tr>
+        <th>Nombre</th>
+        <th>Cliente</th>
+        <th>Fecha límite</th>
+        <th>Estado material</th>
+        {% for ph in phases if ph not in ['dibujo', 'pedidos'] %}
+            <th>{{ ph }}</th>
+        {% endfor %}
+        <th>Actualizar</th>
+        <th>X</th>
+        <th>Imagen</th>
+    </tr>
+    </thead>
+    <tbody>
+    {% for p in projects %}
+    <tr data-pid="{{ p.id }}" class="{% if p.frozen_tasks %}frozen{% endif %}">
+        <td data-sort="{{ p.name|default('', true)|lower }}">{{ p.name }}{% if p.blocked %}<span class="blocked-sign">&#128683;</span>{% endif %}</td>
+        <td data-sort="{{ p.client|default('', true)|lower }}">{{ p.client }}</td>
+        <td data-sort="{{ p.due_date or '' }}" data-sort-type="date">{{ p.due_date }}</td>
+        {% set status = p.material_status if p.material_status is defined and p.material_status else 'complete' %}
+        {% set status_label = material_status_labels.get(status, status|capitalize) %}
+        <td data-sort="{{ status_label|lower }}">
+            <span class="material-status-flag material-status-{{ status }}">{{ status_label }}</span>
+        </td>
+        {% for ph in phases if ph not in ['dibujo', 'pedidos'] %}
+            {% set val = p.phases.get(ph, 0) %}
+            {% if val is sequence %}
+                {% set total = val|map('int')|sum %}
+            {% else %}
+                {% set total = val|int %}
+            {% endif %}
+            <td data-sort="{{ total }}" data-sort-type="number">
+            {% set auto = p.auto_hours.get(ph) if p.auto_hours else False %}
+            {% if auto %}<span class="auto-hour">{{ total }}h</span>{% else %}{{ total }}h{% endif %}<br>
+                {% set assigned = p.assigned.get(ph) if p.assigned and p.assigned.get(ph) else 'Sin planificar' %}
+                <span>{{ assigned }}</span>
+                <form class="phase-hours-form" method="post" action="{{ url_for('update_phase_hours') }}">
+                    <input type="hidden" name="pid" value="{{ p.id }}">
+                    <input type="hidden" name="phase" value="{{ ph }}">
+                    <input type="hidden" name="next" value="{{ url_for('project_list') }}">
+                    <input type="number" name="hours" value="{{ total }}" min="0">
+                </form>
+                <span>{{ start_map.get(p.id, {}).get(ph, '') }}</span>
+            </td>
+        {% endfor %}
+        <td data-sort="0"><button class="row-update-btn">ACTUALIZAR</button></td>
+        <td data-sort="0">
+            <form method="post" action="{{ url_for('delete_project', pid=p.id, next=url_for('project_list')) }}" class="delete-form">
+                <button class="delete-btn" type="submit">&#10060;</button>
+            </form>
+        </td>
+        <td data-sort="{{ 1 if p.image else 0 }}" data-sort-type="number">
+            {% if p.image %}
+                {{ p.image.rsplit('/', 1)[-1] }}
+            {% else %}
+                &mdash;
+            {% endif %}
+            <form class="image-form" method="post" enctype="multipart/form-data" action="{{ url_for('update_image', pid=p.id) }}">
+                <input type="hidden" name="next" value="{{ url_for('project_list') }}">
+                <input type="file" name="image" accept="image/*">
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+<script>
+  const PROJ_START_URL = "{{ url_for('update_start_date') }}";
+  const PHASE_HOURS_URL = "{{ url_for('update_phase_hours') }}";
+  const ROW_URL = "{{ url_for('update_project_row') }}";
+
+  function initProjectTableSorting(root = document) {
+    const collator = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
+    root.querySelectorAll('.projects-table').forEach((table) => {
+      const tbody = table.tBodies[0];
+      if (!tbody) return;
+      const headers = table.querySelectorAll('thead th');
+      headers.forEach((th, index) => {
+        th.classList.add('sortable');
+        th.addEventListener('click', () => {
+          const order = th.dataset.sortOrder === 'asc' ? 'desc' : 'asc';
+          headers.forEach((other) => {
+            if (other !== th) {
+              other.dataset.sortOrder = '';
+              other.classList.remove('sorted-asc', 'sorted-desc');
+            }
+          });
+          th.dataset.sortOrder = order;
+          th.classList.toggle('sorted-asc', order === 'asc');
+          th.classList.toggle('sorted-desc', order === 'desc');
+          const rows = Array.from(tbody.querySelectorAll('tr'));
+          const parseCellValue = (cell) => {
+            if (!cell) {
+              return { blank: true, value: '', type: 'text' };
+            }
+            const raw = cell.dataset.sort !== undefined ? cell.dataset.sort : cell.textContent.trim();
+            const type = cell.dataset.sortType || 'text';
+            const rawString = raw === undefined || raw === null ? '' : `${raw}`;
+            const isBlank = rawString.trim() === '';
+            if (type === 'number') {
+              const num = Number(rawString);
+              return { blank: isBlank, value: Number.isNaN(num) ? 0 : num, type };
+            }
+            if (type === 'date') {
+              if (isBlank) {
+                return { blank: true, value: 0, type };
+              }
+              let time = Number.NaN;
+              if (/^\d{4}-\d{2}-\d{2}$/.test(rawString)) {
+                time = Date.parse(rawString);
+              } else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(rawString)) {
+                const [day, month, year] = rawString.split('/').map(Number);
+                if (!Number.isNaN(day) && !Number.isNaN(month) && !Number.isNaN(year)) {
+                  time = Date.UTC(year, month - 1, day);
+                }
+              } else {
+                time = Date.parse(rawString);
+              }
+              if (Number.isNaN(time)) {
+                return { blank: true, value: 0, type };
+              }
+              return { blank: false, value: time, type };
+            }
+            return { blank: isBlank, value: rawString.toLowerCase(), type: 'text' };
+          };
+          rows.sort((a, b) => {
+            const aCell = a.children[index];
+            const bCell = b.children[index];
+            const aVal = parseCellValue(aCell);
+            const bVal = parseCellValue(bCell);
+            if (aVal.blank && bVal.blank) return 0;
+            if (aVal.blank !== bVal.blank) {
+              return aVal.blank ? 1 : -1;
+            }
+            let comparison = 0;
+            if (aVal.type === 'number' && bVal.type === 'number') {
+              comparison = aVal.value - bVal.value;
+            } else if (aVal.type === 'date' && bVal.type === 'date') {
+              comparison = aVal.value - bVal.value;
+            } else {
+              comparison = collator.compare(aVal.value, bVal.value);
+            }
+            if (comparison === 0) return 0;
+            return order === 'asc' ? (comparison < 0 ? -1 : 1) : (comparison < 0 ? 1 : -1);
+          });
+          rows.forEach((row) => tbody.appendChild(row));
+        });
+      });
+    });
+  }
+
+  initProjectTableSorting();
+  document.querySelectorAll('.proj-start-form').forEach(f => {
+    f.addEventListener('submit', ev => {
+      ev.preventDefault();
+      const data = new FormData(f);
+      fetch(PROJ_START_URL, {
+        method: 'POST',
+        body: data,
+        credentials: 'same-origin'
+      })
+        .then(resp => {
+          if (resp.ok) {
+            location.reload();
+          } else {
+            resp.json().then(d => alert(d.error || 'Error'));
+          }
+        });
+    });
+  });
+  document.querySelectorAll('.phase-hours-form').forEach(f => {
+    f.addEventListener('submit', ev => {
+      ev.preventDefault();
+      const data = new FormData(f);
+      fetch(PHASE_HOURS_URL, {
+        method: 'POST',
+        body: data,
+        credentials: 'same-origin'
+      })
+        .then(resp => {
+          if (resp.ok) {
+            const url = new URL(location);
+            url.searchParams.set('highlight', data.get('pid'));
+            location.href = url;
+          } else {
+            resp.json().then(d => alert(d.error || 'Error'));
+          }
+        });
+    });
+  });
+
+  // Save image immediately when selected
+  document.querySelectorAll('.image-form input[type=file]').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const form = inp.closest('form');
+      const fd = new FormData(form);
+      fetch(form.action, {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin'
+      }).then(resp => {
+        if (resp.ok) {
+          location.reload();
+        } else {
+          resp.json().then(d => alert(d.error || 'Error'));
+        }
+      });
+    });
+  });
+
+  const rows = document.querySelectorAll('.projects-table tbody tr[data-pid]');
+  rows.forEach(row => {
+    row.addEventListener('click', e => {
+      e.stopPropagation();
+      const pid = row.dataset.pid;
+      rows.forEach(r => {
+        if (r.dataset.pid === pid) {
+          r.classList.add('proj-highlight');
+          r.classList.remove('proj-dim');
+        } else {
+          r.classList.add('proj-dim');
+          r.classList.remove('proj-highlight');
+        }
+      });
+    });
+  });
+  document.querySelectorAll('.row-update-btn').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const row = btn.closest('tr');
+      const pid = row.dataset.pid;
+      const data = {pid, phases:{}};
+      row.querySelectorAll('form:not(.delete-form):not(.image-form)').forEach(f => {
+        const fd = new FormData(f);
+        if (f.classList.contains('phase-hours-form')) {
+          data.phases[fd.get('phase')] = fd.get('hours');
+        } else if (f.classList.contains('proj-start-form')) {
+          data.start_date = fd.get('start_date') || fd.get('date');
+        }
+      });
+      const imgForm = row.querySelector('.image-form');
+      let imgPromise = Promise.resolve();
+      if (imgForm) {
+        const inp = imgForm.querySelector('input[type=file]');
+        if (inp && inp.files.length) {
+          const fd = new FormData(imgForm);
+          imgPromise = fetch(imgForm.action, {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin'
+          });
+        }
+      }
+      fetch(ROW_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(data)
+      }).then(resp => {
+        if (resp.ok) {
+          imgPromise.then(() => {
+            const url = new URL(location);
+            url.searchParams.set('highlight', pid);
+            location.href = url;
+          });
+        } else {
+          resp.json().then(d => alert(d.error || 'Error'));
+        }
+      });
+    });
+  });
+  document.addEventListener('click', () => {
+    rows.forEach(r => {
+      r.classList.remove('proj-highlight', 'proj-dim');
+    });
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,169 @@
+{% extends 'base.html' %}
+{% block content %}
+<div id="tab-orden_carpetas" class="tab-content">
+<h2>Orden carpetas</h2>
+
+<div class="orden-carpetas-wrapper">
+<section class="folder-table-section">
+    <h3>Pdte. Verificación</h3>
+    <table id="orden-pending-table" class="resizable-table pending-verification-table" data-resizable>
+        <thead>
+            <tr>
+                <th>Tarjeta</th>
+                <th>Fecha inicio planificada</th>
+                <th>Proyecto</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% if pending_rows %}
+            {% for row in pending_rows %}
+            <tr>
+                <td>{{ row.title }}</td>
+                <td class="pending-date">{{ row.planned_date }}</td>
+                <td class="pending-project">
+                    {% if row.project_title %}
+                    <div class="pending-project-title">{{ row.project_title }}</div>
+                    {% endif %}
+                    {% if row.project_description %}
+                    <div class="pending-project-description">{{ row.project_description }}</div>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr>
+                <td colspan="3">No hay tarjetas en “Pdte. Verificación”.</td>
+            </tr>
+        {% endif %}
+        </tbody>
+    </table>
+</section>
+
+<section class="folder-table-section">
+    <h3>Listo para iniciar</h3>
+    <table id="orden-montaje-table" class="resizable-table montaje-plan-table" data-resizable>
+        <thead>
+            <tr>
+                <th>Proyecto</th>
+                <th>Fecha inicio planificada</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% if montaje_rows %}
+            {% for row in montaje_rows %}
+            <tr>
+                <td class="pending-project">
+                    {% if row.project_title %}
+                    <div class="pending-project-title">{{ row.project_title }}</div>
+                    {% endif %}
+                    {% if row.project_description %}
+                    <div class="pending-project-description">{{ row.project_description }}</div>
+                    {% endif %}
+                </td>
+                <td class="pending-date">{{ row.planned_date }}</td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr>
+                <td colspan="2">No hay proyectos en “Listo para iniciar”.</td>
+            </tr>
+        {% endif %}
+        </tbody>
+    </table>
+</section>
+</div>
+
+<script>
+(function() {
+  const MIN_WIDTH = 80;
+  const STORAGE_PREFIX = 'orden_carpetas_widths_';
+
+  function getStorage() {
+    try {
+      return window.localStorage;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function applyWidth(table, index, width) {
+    const selector = `tr > *:nth-child(${index + 1})`;
+    table.querySelectorAll(selector).forEach((cell) => {
+      cell.style.width = width + 'px';
+      cell.style.minWidth = width + 'px';
+    });
+  }
+
+  function saveWidths(table, headers) {
+    const storage = getStorage();
+    if (!storage || !table.id) {
+      return;
+    }
+    const widths = Array.from(headers, (th) => th.offsetWidth);
+    storage.setItem(STORAGE_PREFIX + table.id, JSON.stringify(widths));
+  }
+
+  function loadWidths(table, headers) {
+    const storage = getStorage();
+    if (!storage || !table.id) {
+      return;
+    }
+    const stored = storage.getItem(STORAGE_PREFIX + table.id);
+    if (!stored) {
+      return;
+    }
+    try {
+      const widths = JSON.parse(stored);
+      widths.forEach((width, index) => {
+        if (typeof width === 'number' && !Number.isNaN(width)) {
+          applyWidth(table, index, width);
+        }
+      });
+    } catch (error) {
+      storage.removeItem(STORAGE_PREFIX + table.id);
+    }
+  }
+
+  function enableResizable(table) {
+    const headers = table.querySelectorAll('thead th');
+    if (!headers.length) {
+      return;
+    }
+    table.classList.add('resizable-table--active');
+    loadWidths(table, headers);
+    headers.forEach((th, index) => {
+      th.style.position = 'relative';
+      const handle = document.createElement('span');
+      handle.className = 'column-resizer';
+      th.appendChild(handle);
+      let startX = 0;
+      let startWidth = 0;
+
+      function onMouseMove(event) {
+        const delta = event.pageX - startX;
+        const nextWidth = Math.max(MIN_WIDTH, startWidth + delta);
+        applyWidth(table, index, nextWidth);
+      }
+
+      function stopResize() {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', stopResize);
+        saveWidths(table, headers);
+      }
+
+      handle.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        startX = event.pageX;
+        startWidth = th.offsetWidth;
+        applyWidth(table, index, startWidth);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', stopResize);
+      });
+    });
+  }
+
+  document.querySelectorAll('table[data-resizable]').forEach(enableResizable);
+})();
+</script>
+</div>
+{% endblock %}

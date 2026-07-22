@@ -1,0 +1,356 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div id="tab-transportes" class="tab-content">
+  <h2>Transportes</h2>
+  <div class="transportes-table-wrap">
+    <table id="transportes-table" class="transportes-table">
+      <colgroup>
+        <col data-col-key="entregado" data-default-width="110">
+        <col data-col-key="numero" data-default-width="110">
+        <col data-col-key="of" data-default-width="120">
+        <col data-col-key="cliente" data-default-width="240">
+        <col data-col-key="imagen" data-default-width="320">
+        <col data-col-key="bulto" data-default-width="140">
+        <col data-col-key="lugar" data-default-width="190">
+        <col data-col-key="embalado" data-default-width="120">
+        <col data-col-key="transportista" data-default-width="220">
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Entregado</th>
+          <th>Número</th>
+          <th>OF</th>
+          <th>Cliente</th>
+          <th>Imagen</th>
+          <th>Bulto</th>
+          <th>Lugar</th>
+          <th>Embalado</th>
+          <th>Transportista</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr data-pid="{{ row.pid }}" draggable="true">
+          <td>
+            <input type="checkbox" class="transport-delivered" data-pid="{{ row.pid }}">
+          </td>
+          <td>{{ row.number }}</td>
+          <td>{{ row.of }}</td>
+          <td title="{{ row.project_name }}">{{ row.client }}</td>
+          <td class="transport-image-cell">
+            {% if row.image_url %}
+            <img src="{{ row.image_url }}" alt="Imagen {{ row.project_name }}" class="transport-thumb">
+            {% endif %}
+          </td>
+          <td>
+            <input type="text" class="transport-input" data-field="bulto" data-pid="{{ row.pid }}" value="{{ row.bulto }}">
+          </td>
+          <td>
+            <select class="transport-select" data-field="lugar" data-pid="{{ row.pid }}" data-placeholder="Añadir lugar...">
+              <option value="">-- Seleccionar --</option>
+              {% for option in location_options %}
+              <option value="{{ option }}"{% if row.lugar == option %} selected{% endif %}>{{ option }}</option>
+              {% endfor %}
+              {% if row.lugar and row.lugar not in location_options %}
+              <option value="{{ row.lugar }}" selected>{{ row.lugar }}</option>
+              {% endif %}
+              <option value="__new__">+ Añadir opción...</option>
+            </select>
+          </td>
+          <td>
+            <input type="checkbox" class="transport-embalado" data-field="embalado" data-pid="{{ row.pid }}"{% if row.embalado %} checked{% endif %}>
+          </td>
+          <td>
+            <select class="transport-select" data-field="transportista" data-pid="{{ row.pid }}" data-placeholder="Añadir transportista...">
+              <option value="">-- Seleccionar --</option>
+              {% for option in carrier_options %}
+              <option value="{{ option }}"{% if row.transportista == option %} selected{% endif %}>{{ option }}</option>
+              {% endfor %}
+              {% if row.transportista and row.transportista not in carrier_options %}
+              <option value="{{ row.transportista }}" selected>{{ row.transportista }}</option>
+              {% endif %}
+              <option value="__new__">+ Añadir opción...</option>
+            </select>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="9" class="transport-empty">No hay proyectos marcados para Transportes.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>
+  .transportes-table-wrap {
+    overflow: auto;
+  }
+
+  .transportes-table {
+    width: max-content;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .transportes-table th,
+  .transportes-table td {
+    border: 1px solid #ddd;
+    padding: 8px;
+    vertical-align: top;
+    position: relative;
+  }
+
+  .transport-thumb {
+    max-width: 300px;
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  .transportes-table tbody tr {
+    cursor: grab;
+  }
+
+  .transportes-table tbody tr.dragging {
+    opacity: 0.45;
+  }
+
+  .transportes-table tbody tr.drag-over {
+    outline: 2px dashed #666;
+  }
+
+  .column-resizer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+  }
+
+  .column-resizer:hover {
+    background: rgba(0, 0, 0, 0.1);
+  }
+</style>
+
+<script>
+(() => {
+  const UPDATE_ROW_URL = "{{ url_for('update_transport_row') }}";
+  const MARK_DELIVERED_URL = "{{ url_for('mark_transport_delivered') }}";
+  const table = document.getElementById('transportes-table');
+  const tbody = table ? table.querySelector('tbody') : null;
+
+  function postJson(url, payload) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(payload),
+    }).then(resp => {
+      if (!resp.ok) throw new Error('Error al guardar');
+      return resp.json().catch(() => ({}));
+    });
+  }
+
+  document.querySelectorAll('.transport-input').forEach((input) => {
+    input.addEventListener('change', () => {
+      postJson(UPDATE_ROW_URL, {
+        pid: input.dataset.pid,
+        field: input.dataset.field,
+        value: input.value,
+      }).catch((error) => {
+        alert(error.message || 'No se pudo guardar.');
+      });
+    });
+  });
+
+  document.querySelectorAll('.transport-embalado').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      postJson(UPDATE_ROW_URL, {
+        pid: checkbox.dataset.pid,
+        field: checkbox.dataset.field,
+        value: checkbox.checked,
+      }).catch((error) => {
+        checkbox.checked = !checkbox.checked;
+        alert(error.message || 'No se pudo guardar.');
+      });
+    });
+  });
+
+  document.querySelectorAll('.transport-select').forEach((select) => {
+    select.addEventListener('change', () => {
+      const previous = select.dataset.previous || select.value;
+      if (select.value === '__new__') {
+        const placeholder = select.dataset.placeholder || 'Nueva opción';
+        const customValue = prompt(placeholder, '');
+        if (!customValue || !customValue.trim()) {
+          select.value = previous && previous !== '__new__' ? previous : '';
+          return;
+        }
+        const clean = customValue.trim();
+        let existing = Array.from(select.options).find((opt) => opt.value === clean);
+        if (!existing) {
+          existing = document.createElement('option');
+          existing.value = clean;
+          existing.textContent = clean;
+          const newOption = Array.from(select.options).find((opt) => opt.value === '__new__');
+          select.insertBefore(existing, newOption || null);
+        }
+        select.value = clean;
+      }
+
+      postJson(UPDATE_ROW_URL, {
+        pid: select.dataset.pid,
+        field: select.dataset.field,
+        value: select.value,
+      }).then(() => {
+        select.dataset.previous = select.value;
+      }).catch((error) => {
+        select.value = previous && previous !== '__new__' ? previous : '';
+        alert(error.message || 'No se pudo guardar.');
+      });
+    });
+    select.dataset.previous = select.value;
+  });
+
+  document.querySelectorAll('.transport-delivered').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      if (!checkbox.checked) {
+        checkbox.checked = false;
+        return;
+      }
+      const confirmed = confirm('Se eliminará la línea. ¿Estás seguro?');
+      if (!confirmed) {
+        checkbox.checked = false;
+        return;
+      }
+      const row = checkbox.closest('tr');
+      postJson(MARK_DELIVERED_URL, { pid: checkbox.dataset.pid })
+        .then(() => {
+          if (row) row.remove();
+        })
+        .catch((error) => {
+          checkbox.checked = false;
+          alert(error.message || 'No se pudo marcar como entregado.');
+        });
+    });
+  });
+
+  if (table) {
+    const WIDTH_KEY_PREFIX = 'transportes-width:';
+    table.querySelectorAll('thead th').forEach((th, idx) => {
+      const col = table.querySelector(`colgroup col:nth-child(${idx + 1})`);
+      if (!col) return;
+      const key = col.dataset.colKey || String(idx);
+      const stored = localStorage.getItem(WIDTH_KEY_PREFIX + key);
+      const defaultWidth = Number(col.dataset.defaultWidth || 160);
+      const width = stored ? Number(stored) : defaultWidth;
+      if (Number.isFinite(width) && width > 60) {
+        col.style.width = `${width}px`;
+      }
+
+      const handle = document.createElement('div');
+      handle.className = 'column-resizer';
+      th.appendChild(handle);
+
+      handle.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        const startX = ev.clientX;
+        const startWidth = col.getBoundingClientRect().width;
+
+        function onMove(moveEv) {
+          const next = Math.max(80, startWidth + (moveEv.clientX - startX));
+          col.style.width = `${next}px`;
+        }
+
+        function onUp() {
+          const finalWidth = Math.round(col.getBoundingClientRect().width);
+          localStorage.setItem(WIDTH_KEY_PREFIX + key, String(finalWidth));
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
+  }
+
+  if (tbody) {
+    const ROW_ORDER_KEY = 'transportes-row-order';
+
+    function saveRowOrder() {
+      const order = Array.from(tbody.querySelectorAll('tr[data-pid]'))
+        .map((row) => (row.dataset.pid || '').trim())
+        .filter((pid) => pid);
+      localStorage.setItem(ROW_ORDER_KEY, JSON.stringify(order));
+    }
+
+    function applyRowOrder() {
+      let stored = [];
+      try {
+        stored = JSON.parse(localStorage.getItem(ROW_ORDER_KEY) || '[]');
+      } catch (_err) {
+        stored = [];
+      }
+      if (!Array.isArray(stored) || !stored.length) return;
+
+      const rowMap = new Map(
+        Array.from(tbody.querySelectorAll('tr[data-pid]')).map((row) => [row.dataset.pid, row])
+      );
+      stored.forEach((pid) => {
+        const row = rowMap.get(String(pid));
+        if (row) tbody.appendChild(row);
+      });
+    }
+
+    applyRowOrder();
+
+    let draggingRow = null;
+
+    function clearDragMarks() {
+      tbody.querySelectorAll('tr.drag-over').forEach((row) => row.classList.remove('drag-over'));
+    }
+
+    tbody.querySelectorAll('tr[data-pid]').forEach((row) => {
+      row.addEventListener('dragstart', (ev) => {
+        const target = ev.target;
+        if (target && (target.closest('input') || target.closest('select') || target.closest('button') || target.closest('textarea') || target.closest('a'))) {
+          ev.preventDefault();
+          return;
+        }
+        draggingRow = row;
+        row.classList.add('dragging');
+      });
+
+      row.addEventListener('dragend', () => {
+        row.classList.remove('dragging');
+        clearDragMarks();
+        saveRowOrder();
+        draggingRow = null;
+      });
+
+      row.addEventListener('dragover', (ev) => {
+        ev.preventDefault();
+        if (!draggingRow || draggingRow === row) return;
+        clearDragMarks();
+        row.classList.add('drag-over');
+        const rect = row.getBoundingClientRect();
+        const insertAfter = ev.clientY > rect.top + rect.height / 2;
+        if (insertAfter) tbody.insertBefore(draggingRow, row.nextSibling);
+        else tbody.insertBefore(draggingRow, row);
+      });
+
+      row.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        clearDragMarks();
+        saveRowOrder();
+      });
+    });
+  }
+})();
+</script>
+{% endblock %}

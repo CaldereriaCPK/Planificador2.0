@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Rastreador de movimientos</h1>
+<table border="1" cellpadding="4" cellspacing="0">
+  <tr>
+    <th>Fecha</th>
+    <th>Proyecto</th>
+    <th>Cliente</th>
+    <th>Fase</th>
+    <th>Motivo</th>
+    <th>Fases afectadas</th>
+  </tr>
+  {% for log in logs %}
+  <tr>
+    <td>{{ log.timestamp }}</td>
+    <td>{{ log.project }}</td>
+    <td>{{ log.client }}</td>
+    <td>{{ log.phase }}</td>
+    <td>{{ log.reason.replace('\n', '<br/>')|safe }}</td>
+    <td>
+      {% if log.affected %}
+        {% for a in log.affected %}
+          {{ a.project }} - {{ a.client }} - {{ a.phase }}{% if not loop.last %}<br/>{% endif %}
+        {% endfor %}
+      {% else %}
+        —
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

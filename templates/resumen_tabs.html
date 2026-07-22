@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+{% block content %}
+{% if render_all_tabs %}
+  {% set tab_map = {} %}
+  {% for tab in tabs %}
+    {% set _ = tab_map.update({tab.title: tab.body}) %}
+  {% endfor %}
+  <div class="pdf-section">
+    <h2>Calendario</h2>
+    {% set calendario_body = tab_map.get('Calendario pedidos', '') %}
+    {% include 'tab_calendario.html' %}
+  </div>
+  <div class="pdf-section">
+    <h2>Gantt</h2>
+    {% set gantt_body = tab_map.get('Gantt', '') %}
+    {% include 'tab_gantt.html' %}
+  </div>
+  <div class="pdf-section">
+    <h2>Recursos</h2>
+    {% set recursos_body = tab_map.get('Recursos', '') %}
+    {% include 'tab_recursos.html' %}
+  </div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Kanbanize</h2>
+<table class="bugs-table kanban-table">
+  <thead>
+    <tr>
+      <th>Fecha</th>
+      <th>ID</th>
+      <th>Título</th>
+      <th>Datos</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for e in cards %}
+    <tr>
+      <td>{{ e.timestamp or '' }}</td>
+      <td>{{ e.card.taskid }}</td>
+      <td>{{ e.card.title }}</td>
+      <td><pre>{{ e.card | tojson(indent=2) }}</pre></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

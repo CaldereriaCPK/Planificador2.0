@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+{% block content %}
+<div id="tab-vacaciones" class="tab-content">
+<h2>Vacaciones</h2>
+{% if error %}
+<p class="notice error">{{ error }}</p>
+{% endif %}
+<form method="post">
+    <fieldset class="vacation-workers">
+        <legend>Trabajadores:</legend>
+        {% for w in workers %}
+        <label class="vacation-worker">
+            <input type="checkbox" name="workers" value="{{ w }}">
+            <span>{{ w }}</span>
+        </label>
+        {% endfor %}
+    </fieldset>
+    <label>Inicio:<input type="date" name="start" required></label>
+    <label>Fin:<input type="date" name="end" required></label>
+    <button type="submit">Añadir</button>
+</form>
+<table>
+    <tr><th>Trabajador</th><th>Inicio</th><th>Fin</th><th></th></tr>
+    {% for v in vacations %}
+    <tr>
+        <td><strong>{{ v.worker.upper() }}</strong></td>
+        <td>{{ v.start_display }}</td>
+        <td>{{ v.end_display }}</td>
+        <td>
+            <form method="post" action="{{ url_for('delete_vacation', vid=v.id) }}">
+                <button class="delete-btn" type="submit">&#10060;</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+</div>
+{% endblock %}

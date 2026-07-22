@@ -1,0 +1,29 @@
+<table class="project-form">
+    <tr>
+        <td>Nombre del proyecto</td>
+        <td colspan="2"><input type="text" name="name" value="{{ (prefill|default({})).get('name', '') }}" required></td>
+    </tr>
+    <tr>
+        <td>Cliente</td>
+        <td colspan="2"><input type="text" name="client" value="{{ (prefill|default({})).get('client', '') }}" required></td>
+    </tr>
+    <tr>
+        <td>Fecha límite</td>
+        <td colspan="2"><input type="text" name="due_date" value="{{ (prefill|default({})).get('due_date', '') }}" placeholder="dd-mm" required></td>
+    </tr>
+    {% set hidden_phases = ['dibujo', 'pedidos', 'verificar', 'mecanizar', 'tratamiento'] %}
+    {% for phase in phases %}
+        {% if phase not in hidden_phases %}
+        <tr>
+            <td>{{ phase }} (horas)</td>
+            <td><input type="number" name="{{ phase }}"></td>
+            <td><input type="number" name="{{ phase }}_days" placeholder="días"></td>
+        </tr>
+        {% endif %}
+    {% endfor %}
+    <tr>
+        <td colspan="3" style="text-align:center;">
+            <button class="save-btn" type="submit">Guardar</button>
+        </td>
+    </tr>
+</table>

@@ -1,0 +1,4281 @@
+{% extends 'base.html' %}
+
+{% macro render_note_row(cell_tag, cols, notes, today) %}
+    <tr class="notes-row">
+        <{{ cell_tag }} class="resource-col"></{{ cell_tag }}>
+        {% for c in cols %}
+        {% if c.type == 'day' %}
+        {% set d = c.dates[0] %}
+        {% set ms = notes.get(d.isoformat()) %}
+        {% set text = (ms | join('\n')) if ms else '' %}
+        <{{ cell_tag }} data-date="{{ d.isoformat() }}" class="note-cell{% if d == today %} today{% endif %}">
+            <textarea class="calendar-note-input" data-date="{{ d.isoformat() }}">{{ text }}</textarea>
+        </{{ cell_tag }}>
+        {% else %}
+        <{{ cell_tag }} colspan="2" class="weekend-cell{% if today in c.dates %} today{% endif %}"></{{ cell_tag }}>
+        {% endif %}
+        {% endfor %}
+    </tr>
+{% endmacro %}
+
+{% macro project_title(name, pid=None) %}
+    {%- set info = None -%}
+    {%- if pid is not none -%}
+        {%- set info = project_data.get(pid|string) or project_data.get(pid) -%}
+    {%- endif -%}
+    {%- set tags = [] -%}
+    {%- if info and info.kanban_tags is defined and info.kanban_tags -%}
+        {%- if info.kanban_tags is string -%}
+            {%- set tags = [info.kanban_tags] -%}
+        {%- else -%}
+            {%- set tags = info.kanban_tags -%}
+        {%- endif -%}
+    {%- endif -%}
+    {%- set normalized = tags | map('lower') | list -%}
+    {%- if 'revisado' in normalized -%}
+        <strong>R -</strong> {{ name }}
+    {%- else -%}
+        {{ name }}
+    {%- endif -%}
+{% endmacro %}
+
+{% block content %}
+<div class="complete-container">
+    <div class="complete-top">
+    <div class="planner-top-tools complete-top-panel" data-complete-top-panel="tools">
+        <div class="hours-btn-container">
+            <label class="optional-phase-toggle planner-tool-btn" hidden>
+                <input type="checkbox" id="optional-phase-toggle" {% if import_optional_phases %}checked{% endif %}>
+                Importar mecanizados y tratamientos.
+            </label>
+            <button id="hours-btn" class="planner-tool-btn" type="button">Editar jornada laboral</button>
+            <button id="summary-pdf-btn" class="planner-tool-btn" type="button" data-backup-url="{{ url_for('backup_pdf') }}">PDF + Backup</button>
+        </div>
+        <div class="planner-top-notes">
+            <label for="planner-top-notes-input">Notas</label>
+            <textarea id="planner-top-notes-input" placeholder="Escribe aquí tus notas..."></textarea>
+        </div>
+    </div>
+    <div class="complete-top-resizer" data-complete-top-resizer="0" aria-hidden="true"></div>
+    <div class="complete-orders-summary complete-top-panel" data-complete-top-panel="orders">
+        <h3>Resumen pedidos</h3>
+        <div class="orders-summary-grid">
+            {% for key in ['late', 'today', 'tomorrow'] %}
+            {% set bucket = orders_summary.get(key, {}) %}
+            <div class="orders-summary-col">
+                <h4>{{ bucket.get('title', '') }}</h4>
+                {% set items = bucket.get('items', []) %}
+                {% if items %}
+                <ul>
+                    {% for item in items %}
+                    <li>{{ item.title }} <span class="orders-summary-project-name">({{ item.project }})</span></li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <div class="orders-summary-empty">Sin pedidos</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="complete-top-resizer" data-complete-top-resizer="1" aria-hidden="true"></div>
+    <div class="complete-conflicts complete-top-panel" data-complete-top-panel="conflicts">
+        <h3>Proyectos generados</h3>
+        <form method="post" action="{{ url_for('clear_conflicts') }}">
+            <button type="submit">Borrar todos</button>
+        </form>
+        <form method="post" action="{{ url_for('show_conflicts') }}">
+            <button type="submit">Mostrar todos</button>
+        </form>
+        <ul>
+{% for c in conflicts %}
+            <li class="{% if c.source == 'kanbanize' %}kanban-conflict{% endif %}"><a href="#" class="conflict-link" data-project="{{ c.project }}" {% if c.pid %}data-pid="{{ c.pid }}" data-offset="{{ c.offset }}"{% endif %}>{{ project_title(c.project, c.pid) }} - {{ c.client }}</a>: {{ c.message }}
+                {% if c.changes %}
+                <ul>
+                {% for ch in c.changes %}
+                    <li><a href="#" class="affected-link" data-project="{{ ch.name }}" data-pid="{{ ch.id }}" {% if ch.offset is not none %}data-offset="{{ ch.offset }}"{% endif %}>{{ project_title(ch.name, ch.id) }}</a> - {{ ch.client }}
+                        {% if ch.met %}
+                            <span class="ok">&#10004;</span>
+                        {% else %}
+                            <span class="late">&#10060;</span>
+                        {% endif %}
+                    </li>
+                {% endfor %}
+                </ul>
+                {% endif %}
+                <form method="post" action="{{ url_for('delete_conflict', key=c.key) }}" style="display:inline;">
+                    <button type="submit">Borrar</button>
+                </form>
+            </li>
+        {% endfor %}
+        </ul>
+    </div>
+    </div> <!-- end complete-top -->
+    <div class="complete-calendar">
+        <h2>Calendario</h2>
+        <div class="controls">
+            <form id="filter-form" method="get">
+                <input type="hidden" name="project_id" value="{{ project_id_filter }}">
+                <label>Filtro: <input type="text" name="q" value="{{ project_filter }}" placeholder="Proyecto, cliente o fase"></label>
+                <button type="submit">Filtrar</button>
+            </form>
+            <button id="today-btn" type="button">HOY</button>
+            <button id="sort-due-btn" class="order-toggle" type="button">Fecha tope</button>
+            <button id="sort-status-btn" class="order-toggle" type="button">Estado material</button>
+            <button id="sort-phase-btn" class="order-toggle" type="button">Agrupar por fases</button>
+            <button id="pizarra-toggle" class="order-toggle" type="button">Pizarra</button>
+        </div>
+        <div id="pizarra-toolbar" class="pizarra-toolbar" hidden>
+            <label for="pizarra-color">Color</label>
+            <input id="pizarra-color" type="color" value="#e53935">
+            <label for="pizarra-size">Grosor</label>
+            <input id="pizarra-size" type="range" min="2" max="20" value="6">
+            <button id="pizarra-eraser" type="button">Goma</button>
+            <button id="pizarra-undo" type="button" aria-label="Deshacer">↩︎</button>
+            <button id="pizarra-redo" type="button" aria-label="Rehacer">↪︎</button>
+        </div>
+        <div class="calendar-flex">
+        <div class="schedule-wrapper">
+<table class="schedule">
+    <thead>
+    {% set day_names = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'] %}
+    <tr id="hours-row" class="hours-row" style="display:none;">
+        <th class="resource-col">Horas</th>
+        {% for c in cols %}
+        {% if c.type == 'day' %}
+        {% set d = c.dates[0] %}
+        {% set default_hours = 7 if d.weekday() == 4 else 8 %}
+        {% set h = hours.get(d.isoformat(), default_hours) %}
+        <th><form class="hours-form" data-date="{{ d.isoformat() }}"><select>
+            {% for n in range(1,10) %}
+            <option value="{{n}}" {% if n==h %}selected{% endif %}>{{n}}h</option>
+            {% endfor %}
+        </select></form></th>
+        {% else %}
+        <th colspan="2" class="weekend-cell"></th>
+        {% endif %}
+        {% endfor %}
+    </tr>
+    {{ render_note_row('th', cols, notes, today) }}
+    <tr class="week-row">
+        <th class="resource-col"></th>
+        {% for c in cols %}
+        {% if c.type == 'day' and c.dates[0].weekday() == 0 %}
+        <th colspan="5">Semana {{ c.dates[0].isocalendar()[1] }}</th>
+        {% elif c.type == 'weekend' %}
+        <th colspan="2" class="weekend-cell"></th>
+        {% endif %}
+        {% endfor %}
+    </tr>
+    <tr class="day-row">
+        <th class="resource-col">Recurso</th>
+        {% for c in cols %}
+        {% if c.type == 'day' %}
+        {% set d = c.dates[0] %}
+        <th class="{% if d == today %}today{% endif %}">{{ day_names[d.weekday()] }} {{ d.strftime('%d/%m') }}</th>
+        {% else %}
+        <th colspan="2" class="weekend{% if today in c.dates %} today{% endif %}"></th>
+        {% endif %}
+        {% endfor %}
+    </tr>
+    </thead>
+    <tbody>
+{% for worker, days_data in schedule.items() %}
+    <tr data-worker="{{ worker }}"{% if worker in ['Oficina técnica.', 'Oficina técnica', 'Oficina Tecnica.', 'Oficina Tecnica'] %} class="office-tech-row"{% endif %}>
+        <td class="resource-col">
+            <div class="worker-label">{{ worker }}</div>
+            <textarea class="worker-note" data-worker="{{ worker }}" data-saved-height="{{ worker_notes.get(worker, {}).get('height') or '' }}">{{ worker_notes.get(worker, {}).get('text','') }}</textarea>
+            {% set wn = worker_notes.get(worker) %}
+            <div class="worker-note-time">{% if wn and wn.edited %}{{ wn.edited }}{% endif %}</div>
+        </td>
+        {% for c in cols %}
+        {% if c.type == 'day' %}
+        {% set d = c.dates[0] %}
+        {% set tasks = days_data.get(d.isoformat(), []) %}
+        {% set total = tasks|sum(attribute='hours') %}
+        {% set worker_overrides = worker_day_hours.get(worker, {}) %}
+        {% set base_limit = worker_limits.get(worker) %}
+        {% set override = worker_overrides.get(d.isoformat()) %}
+        {% if override is none %}
+        {% set default_hours = 7 if d.weekday() == 4 else 8 %}
+        {% if d.isoformat() in hours %}
+        {% set limit = hours.get(d.isoformat()) %}
+        {% elif d.weekday() == 4 %}
+        {% set limit = default_hours %}
+        {% else %}
+        {% set limit = base_limit if base_limit is not none else default_hours %}
+        {% endif %}
+        {% else %}
+        {% set limit = override %}
+        {% endif %}
+        {% set deactivated_from = deactivated_workers.get(worker) if deactivated_workers is defined else none %}
+        {% set is_deactivated_day = deactivated_from and d.isoformat() >= deactivated_from %}
+        {% set no_border = is_deactivated_day or (tasks | selectattr('phase','equalto','vacaciones') | list | length > 0) or (tasks | selectattr('phase','equalto','mecanizar') | list | length > 0) or (tasks | selectattr('phase','equalto','tratamiento') | list | length > 0) or (worker in ['Mecanizar', 'Tratamiento']) %}
+        {% set urgent_ns = namespace(value=false) %}
+        {% for t in tasks %}
+            {% set urgent_info = project_data.get(t.pid|string) or project_data.get(t.pid) %}
+            {% if urgent_info and urgent_info.get('urgent') %}
+                {% set urgent_ns.value = true %}
+            {% endif %}
+        {% endfor %}
+        <td data-date="{{ d.isoformat() }}" class="{% if total < limit and not no_border %}incomplete {% endif %}{% if override is not none and (base_limit is none or override != base_limit) %}hour-override {% endif %}{% if notes.get(d.isoformat()) %}note-day {% endif %}{% if d == today %}today {% endif %}{% if no_border %}vacation-day {% endif %}{% if is_deactivated_day %}deactivated-day {% endif %}{% if urgent_ns.value %}urgent-cell{% endif %}">
+            {% if is_deactivated_day %}
+            <div class="task deactivated" data-worker="{{ worker }}" data-day="{{ d.isoformat() }}">DESACTIVADO<br><span class="deact-delete" style="display:none;">X</span></div>
+            {% endif %}
+            {% for t in tasks %}
+            {% set matches_filter = t.get('filter_match', True) %}
+            {% if t.phase == 'vacaciones' %}
+            <div class="task vacation{% if filter_active and not matches_filter %} filter-muted{% endif %}" data-worker="{{ worker }}" data-day="{{ d.isoformat() }}" data-filter-match="{{ 'true' if matches_filter else 'false' }}">VACACIONES<br><span class="vac-delete" style="display:none;">X</span></div>
+            {% else %}
+            {% set project_info = project_data.get(t.pid|string) %}
+            {% if project_info is none %}
+            {% set project_info = project_data.get(t.pid) %}
+            {% endif %}
+            {% set material_status = project_info.material_status if project_info and project_info.material_status else '' %}
+            {% set launched_ns = namespace(value=false) %}
+            {% set task_part_norm = t.part|string if t.part is not none else '' %}
+            {% for launched in (project_info.launched_phases if project_info and project_info.launched_phases is defined else []) %}
+                {% set launched_part = launched.part if launched.part is defined else none %}
+                {% set launched_part_norm = launched_part|string if launched_part is not none else '' %}
+                {% if launched.phase == t.phase and launched_part_norm == task_part_norm %}
+                    {% set launched_ns.value = true %}
+                {% endif %}
+            {% endfor %}
+            <div class="task{% if launched_ns.value %} launched-task{% endif %}{% if t.frozen %} frozen{% endif %}{% if t.archived_shadow %} archived-shadow{% endif %}{% if filter_active and not matches_filter %} filter-muted{% endif %}" draggable="{{ 'false' if t.frozen or t.archived_shadow else 'true' }}" style="border-color: {{ t.color }};{% if t.frozen_background %} --frozen-background: {{ t.frozen_background }};{% endif %}" data-project="{{ t.project }}" data-client="{{ t.client }}" data-due="{{ t.due_date }}" data-start="{{ t.start_date }}" data-day="{{ d.isoformat() }}" data-pid="{{ t.pid }}" data-phase="{{ t.phase }}"{% if t.part is not none %} data-part="{{ t.part }}"{% endif %} data-hours="{{ t.hours }}" data-filter-match="{{ 'true' if matches_filter else 'false' }}" data-archived="{{ 'true' if t.archived_shadow else 'false' }}">
+                <span class="task-main">
+                {% set phase_status = t.get('phase_deadline_status') %}
+                {% if phase_status == 'late' %}
+                    <span class="phase-deadline-indicator phase-deadline-late">&#10060;</span>
+                {% elif phase_status == 'met' %}
+                    <span class="phase-deadline-indicator phase-deadline-met">&#10004;</span>
+                {% elif t.due_status == 'after' %}
+                    <span class="due-after">&#10060;</span>
+                {% elif t.due_status == 'before' %}
+                    <span class="due-before">&#10060;</span>
+                {% elif t.due_status == 'met' %}
+                    <span class="due-ok">&#10004;</span>
+                {% endif %}
+                {% set key = t.pid ~ '|' ~ t.phase ~ '|' ~ d.isoformat() %}
+                {% if key in split_points %}<span class="split-dot">&#9679;</span> {% endif %}
+                    <span class="task-project{% if material_status %} task-project-status-{{ material_status }}{% endif %}">{{ project_title(t.project, t.pid) }}</span>{% if t.blocked %}<span class="blocked-sign">&#128683;</span>{% endif %} - {{ t.client|truncate(15, True) }} - {{ t.phase }}{% if t.part is not none %} ({{ t.part|int + 1 }}){% endif %}
+                </span>
+                {% if t.hours %}
+                <span class="task-hours">{% if t.auto %}<span class="auto-hour">{{ t.hours }}h</span>{% else %}{{ t.hours }}h{% endif %}</span>
+                {% endif %}
+            </div>
+            {% endif %}
+            {% endfor %}
+        </td>
+        {% else %}
+        <td colspan="2" class="weekend-cell{% if today in c.dates %} today{% endif %}"></td>
+        {% endif %}
+        {% endfor %}
+    </tr>
+{% endfor %}
+    </tbody>
+    <tfoot>
+    <tr class="day-row">
+        <th class="resource-col">Recurso</th>
+        {% for c in cols %}
+        {% if c.type == 'day' %}
+        {% set d = c.dates[0] %}
+        <th class="{% if d == today %}today{% endif %}">{{ day_names[d.weekday()] }} {{ d.strftime('%d/%m') }}</th>
+        {% else %}
+        <th colspan="2" class="weekend{% if today in c.dates %} today{% endif %}"></th>
+        {% endif %}
+        {% endfor %}
+    </tr>
+    </tfoot>
+</table>
+<div id="pizarra-layer" class="pizarra-layer" aria-hidden="true">
+    <canvas id="pizarra-canvas"></canvas>
+</div>
+</div>
+        <div class="unplanned-panel" id="unplanned-panel">
+            <div id="unplanned-resizer" class="unplanned-resizer"></div>
+            <h3>Fases sin planificar</h3>
+            <button id="toggle-all-unplanned-btn" type="button" class="planner-tool-btn">Plegar/Desplegar fases</button>
+            <input type="text" id="unplanned-search-input" class="unplanned-search-input" placeholder="Buscar en fases sin planificar...">
+            <div id="unplanned-phase-filters" class="unplanned-phase-filters"></div>
+            <div class="manual-group">
+                <div class="manual-header">Arrastrar aquí</div>
+                <div id="manual-dropzone" class="manual-dropzone" data-worker="Sin planificar">
+                    <div class="manual-placeholder"{% if manual_bucket %} style="display:none;"{% endif %}>Suelta aquí las fases que quieras guardar temporalmente.</div>
+                {% for item in manual_bucket %}
+                    {% set matches_filter = item.filter_match %}
+                    {% set status = item.material_status %}
+                    {% set missing = status == 'missing' %}
+                    {% set key = item.pid|string ~ '|' ~ item.phase ~ '|' ~ (item.day) %}
+                    <div class="task manual-task{% if item.frozen %} frozen{% endif %}{% if filter_active and not matches_filter %} filter-muted{% endif %}" draggable="true" style="border-color: {{ item.color }};{% if item.frozen_background %} --frozen-background: {{ item.frozen_background }};{% endif %}" data-project="{{ item.project }}" data-client="{{ item.client }}" data-due="{{ item.due_date or '' }}" data-start="{{ item.start_date or '' }}" data-day="{{ item.day or '' }}" data-pid="{{ item.pid }}" data-phase="{{ item.phase }}"{% if item.part is not none %} data-part="{{ item.part }}"{% endif %} data-filter-match="{{ 'true' if matches_filter else 'false' }}">
+                        <span class="task-main">
+                        {% set phase_status = item.phase_deadline_status %}
+                        {% if phase_status == 'late' %}
+                            <span class="phase-deadline-indicator phase-deadline-late">&#10060;</span>
+                        {% elif phase_status == 'met' %}
+                            <span class="phase-deadline-indicator phase-deadline-met">&#10004;</span>
+                        {% elif item.due_status == 'after' %}
+                            <span class="due-after">&#10060;</span>
+                        {% elif item.due_status == 'before' %}
+                            <span class="due-before">&#10060;</span>
+                        {% elif item.due_status == 'met' %}
+                            <span class="due-ok">&#10004;</span>
+                        {% endif %}
+                        {% if key in split_points %}<span class="split-dot">&#9679;</span> {% endif %}
+                        <span class="material-status-flag {{ item.material_css }}">{{ item.material_label }}</span>
+                        <span class="task-project{% if missing %} task-project-missing{% endif %}">{{ project_title(item.project, item.pid) }}</span>{% if item.blocked %}<span class="blocked-sign">&#128683;</span>{% endif %} - {{ item.client|truncate(15, True) }} - {{ item.phase }}{% if item.part is not none %} ({{ item.part|int + 1 }}){% endif %}
+                        </span>
+                        {% if item.hours %}
+                        <span class="task-hours">{% if item.auto and item.phase not in ['mecanizar', 'tratamiento'] %}<span class="auto-hour">{{ item.hours }}h</span>{% else %}{{ item.hours }}h{% endif %}</span>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+                </div>
+            </div>
+            <div class="unplanned-list" data-worker="Sin planificar" data-mode="status">
+            {% for section in unplanned_groups %}
+            <div class="unplanned-status-group" data-status="{{ section.status }}">
+                <div class="unplanned-status-header"><button type="button" class="group-toggle" data-group-key="status:{{ section.status }}">&#8722;</button> <span class="material-status-flag {{ section.css_class }}">{{ section.label }}</span></div>
+                <div class="unplanned-status-content" data-group-content="status:{{ section.status }}">
+                {% for g in section.projects %}
+            {% set folder_match = g.get('filter_match', True) %}
+            {% set folder_missing = section.status == 'missing' %}
+            <div class="unplanned-folder{% if filter_active and not folder_match %} filter-muted{% endif %}" data-pid="{{ g.pid }}" data-status="{{ section.status }}" data-due="{{ g.due_date or '' }}" data-filter-match="{{ 'true' if folder_match else 'false' }}">
+                <div class="folder-header"><button type="button" class="folder-toggle">&#43;</button> <span class="task-project{% if folder_missing %} task-project-missing{% endif %}">{{ project_title(g.project, g.pid) }}</span> - {{ g.client }}{% if g.due_date %} - <span class="folder-due">{{ g.due_date }}</span>{% endif %}</div>
+                <div class="folder-content" style="display:none;">
+                {% for t in g.tasks %}
+                {% set matches_filter = t.get('filter_match', True) %}
+                <div class="task{% if t.frozen %} frozen{% endif %}{% if filter_active and not matches_filter %} filter-muted{% endif %}" draggable="true" style="border-color: {{ t.color }};{% if t.frozen_background %} --frozen-background: {{ t.frozen_background }};{% endif %}" data-project="{{ t.project }}" data-client="{{ t.client }}" data-due="{{ t.due_date }}" data-start="{{ t.start_date }}" data-day="{{ t.day }}" data-pid="{{ t.pid }}" data-phase="{{ t.phase }}"{% if t.part is not none %} data-part="{{ t.part }}"{% endif %} data-filter-match="{{ 'true' if matches_filter else 'false' }}">
+                    <span class="task-main">
+                    {% set phase_status = t.get('phase_deadline_status') %}
+                    {% if phase_status == 'late' %}
+                        <span class="phase-deadline-indicator phase-deadline-late">&#10060;</span>
+                    {% elif phase_status == 'met' %}
+                        <span class="phase-deadline-indicator phase-deadline-met">&#10004;</span>
+                    {% elif t.due_status == 'after' %}
+                        <span class="due-after">&#10060;</span>
+                    {% elif t.due_status == 'before' %}
+                        <span class="due-before">&#10060;</span>
+                    {% elif t.due_status == 'met' %}
+                        <span class="due-ok">&#10004;</span>
+                    {% endif %}
+                    {% set key = t.pid ~ '|' ~ t.phase ~ '|' ~ t.day %}
+                    {% if key in split_points %}<span class="split-dot">&#9679;</span> {% endif %}
+                    <span class="task-project{% if folder_missing %} task-project-missing{% endif %}">{{ project_title(t.project, t.pid) }}</span>{% if t.blocked %}<span class="blocked-sign">&#128683;</span>{% endif %} - {{ t.client|truncate(15, True) }} - {{ t.phase }}{% if t.part is not none %} ({{ t.part|int + 1 }}){% endif %}
+                    </span>
+                    {% if t.hours %}
+                    <span class="task-hours">{% if t.auto %}<span class="auto-hour">{{ t.hours }}h</span>{% else %}{{ t.hours }}h{% endif %}</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                </div>
+            </div>
+                {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+            </div>
+            <div class="unplanned-list" data-worker="Sin planificar" data-mode="due" style="display:none;">
+            {% for g in unplanned_due %}
+            {% set folder_match = g.get('filter_match', True) %}
+            {% set status = g.get('material_status', 'complete') %}
+            {% set status_label = material_status_labels.get(status, status|capitalize) %}
+            {% set folder_missing = status == 'missing' %}
+            <div class="unplanned-folder{% if filter_active and not folder_match %} filter-muted{% endif %}" data-pid="{{ g.pid }}" data-status="{{ status }}" data-due="{{ g.due_date or '' }}" data-filter-match="{{ 'true' if folder_match else 'false' }}">
+                <div class="folder-header"><button type="button" class="folder-toggle">&#43;</button> <span class="material-status-flag material-status-{{ status }}">{{ status_label }}</span> <span class="task-project{% if folder_missing %} task-project-missing{% endif %}">{{ project_title(g.project, g.pid) }}</span> - {{ g.client }}{% if g.due_date %} - <span class="folder-due">{{ g.due_date }}</span>{% endif %}</div>
+                <div class="folder-content" style="display:none;">
+                {% for t in g.tasks %}
+                {% set matches_filter = t.get('filter_match', True) %}
+                <div class="task{% if t.frozen %} frozen{% endif %}{% if filter_active and not matches_filter %} filter-muted{% endif %}" draggable="true" style="border-color: {{ t.color }};{% if t.frozen_background %} --frozen-background: {{ t.frozen_background }};{% endif %}" data-project="{{ t.project }}" data-client="{{ t.client }}" data-due="{{ t.due_date }}" data-start="{{ t.start_date }}" data-day="{{ t.day }}" data-pid="{{ t.pid }}" data-phase="{{ t.phase }}"{% if t.part is not none %} data-part="{{ t.part }}"{% endif %} data-filter-match="{{ 'true' if matches_filter else 'false' }}">
+                    <span class="task-main">
+                    {% set phase_status = t.get('phase_deadline_status') %}
+                    {% if phase_status == 'late' %}
+                        <span class="phase-deadline-indicator phase-deadline-late">&#10060;</span>
+                    {% elif phase_status == 'met' %}
+                        <span class="phase-deadline-indicator phase-deadline-met">&#10004;</span>
+                    {% elif t.due_status == 'after' %}
+                        <span class="due-after">&#10060;</span>
+                    {% elif t.due_status == 'before' %}
+                        <span class="due-before">&#10060;</span>
+                    {% elif t.due_status == 'met' %}
+                        <span class="due-ok">&#10004;</span>
+                    {% endif %}
+                    {% set key = t.pid ~ '|' ~ t.phase ~ '|' ~ t.day %}
+                    {% if key in split_points %}<span class="split-dot">&#9679;</span> {% endif %}
+                    <span class="task-project{% if folder_missing %} task-project-missing{% endif %}">{{ project_title(t.project, t.pid) }}</span>{% if t.blocked %}<span class="blocked-sign">&#128683;</span>{% endif %} - {{ t.client|truncate(15, True) }} - {{ t.phase }}{% if t.part is not none %} ({{ t.part|int + 1 }}){% endif %}
+                    </span>
+                    {% if t.hours %}
+                    <span class="task-hours">{% if t.auto %}<span class="auto-hour">{{ t.hours }}h</span>{% else %}{{ t.hours }}h{% endif %}</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+            </div>
+            <div class="unplanned-list" data-worker="Sin planificar" data-mode="phase" style="display:none;">
+            {% for group in unplanned_phase_groups %}
+            <div class="unplanned-phase-group" data-phase="{{ group.phase }}">
+                <div class="unplanned-phase-header"><button type="button" class="group-toggle" data-group-key="phase:{{ group.phase }}">&#8722;</button> <strong>{{ group.phase }}</strong></div>
+                <div class="unplanned-phase-content" data-group-content="phase:{{ group.phase }}">
+                {% for t in group.tasks %}
+                {% set matches_filter = t.get('filter_match', True) %}
+                {% set status = t.get('material_status', 'complete') %}
+                <div class="task{% if t.frozen %} frozen{% endif %}{% if t.archived_shadow %} archived-shadow{% endif %}{% if filter_active and not matches_filter %} filter-muted{% endif %}" draggable="{{ 'false' if t.frozen or t.archived_shadow else 'true' }}" style="border-color: {{ t.color }};{% if t.frozen_background %} --frozen-background: {{ t.frozen_background }};{% endif %}" data-project="{{ t.project }}" data-client="{{ t.client }}" data-due="{{ t.due_date }}" data-start="{{ t.start_date }}" data-day="{{ t.day }}" data-pid="{{ t.pid }}" data-phase="{{ t.phase }}"{% if t.part is not none %} data-part="{{ t.part }}"{% endif %} data-filter-match="{{ 'true' if matches_filter else 'false' }}" data-archived="{{ 'true' if t.archived_shadow else 'false' }}">
+                    <span class="task-main">
+                    <span class="task-project task-project-status-{{ status }}">{{ project_title(t.project, t.pid) }}</span>{% if t.blocked %}<span class="blocked-sign">&#128683;</span>{% endif %} - {{ t.client|truncate(15, True) }} - {{ t.phase }}{% if t.part is not none %} ({{ t.part|int + 1 }}){% endif %}
+                    </span>
+                    {% if t.hours %}
+                    <span class="task-hours">{% if t.auto and t.phase not in ['mecanizar', 'tratamiento'] %}<span class="auto-hour">{{ t.hours }}h</span>{% else %}{{ t.hours }}h{% endif %}</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+            </div>
+        </div>
+        </div>
+        <div id="info-popup" class="info-popup"></div>
+<div id="conflict-modal" class="conflict-modal"><div class="conflict-content"><div id="conflict-text"></div><button id="conflict-close">Cerrar</button></div></div>
+<div id="split-modal" class="conflict-modal">
+  <div class="conflict-content">
+    <form id="split-form">
+      <div id="split-total-hours" class="split-total-hours"></div>
+      <div id="split-parts-container" class="split-parts-container"></div>
+      <button type="button" id="split-add-part" class="split-add-part" title="Añadir parte">+</button>
+      <div class="split-actions">
+        <button type="submit">Aceptar</button>
+        <button type="button" id="split-cancel">Cancelar</button>
+      </div>
+    </form>
+  </div>
+</div>
+<div id="block-modal" class="conflict-modal"><div class="conflict-content"><div id="block-text"></div><button id="block-unfreeze">Descongelar</button> <button id="block-skip">No descongelar</button> <button id="block-cancel">Cancelar</button></div></div>
+<div id="history-modal" class="history-modal">
+    <div class="history-content">
+        <button type="button" class="history-close" aria-label="Cerrar">&#10005;</button>
+        <h3 id="history-title">Historial</h3>
+        <div id="history-list" class="history-list"></div>
+    </div>
+</div>
+<div id="day-menu-modal" class="day-menu-modal" aria-hidden="true">
+  <div class="day-menu-content">
+    <button type="button" class="day-menu-close" aria-label="Cerrar">&#10005;</button>
+    <div id="day-menu-title" class="day-menu-title"></div>
+    <button type="button" id="day-menu-vacation" class="day-menu-action">Asignar vacaciones a este día</button>
+    <button type="button" id="day-menu-deactivate" class="day-menu-action day-menu-deactivate">Desactivar recurso</button>
+    <div class="day-menu-hours">
+      <select id="day-menu-hour-select" class="day-menu-select">
+        {% for n in range(1, 11) %}
+        <option value="{{ n }}">{{ n }}h</option>
+        {% endfor %}
+      </select>
+      <button type="button" id="day-menu-hours-btn" class="day-menu-action">Cambiar jornada de este día</button>
+    </div>
+    <button type="button" id="day-menu-add-project" class="day-menu-action">Añadir proyecto</button>
+  </div>
+</div>
+
+<div id="add-project-inline-modal" class="conflict-modal" aria-hidden="true">
+  <div class="conflict-content add-project-inline-content">
+    <button type="button" class="day-menu-close" id="add-project-inline-close" aria-label="Cerrar">&#10005;</button>
+    <h3>Añadir proyecto</h3>
+    <p class="notice error">NOTA: Es necesario darle horas a alguna de las fases al generar un proyecto desde este formulario.</p>
+    <form id="add-project-inline-form" method="post" enctype="multipart/form-data">
+      <input type="hidden" name="target_worker" id="add-project-target-worker">
+      <input type="hidden" name="target_date" id="add-project-target-date">
+      {% include '_project_form_fields.html' %}
+    </form>
+  </div>
+</div>
+<div id="reload-modal" class="conflict-modal reload-modal" aria-hidden="true">
+  <div class="reload-content">RECARGA LA PÁGINA</div>
+</div>
+    </div>
+    <div class="complete-projects">
+        <h2>Proyectos <button id="projects-toggle" type="button">&#8722;</button></h2>
+        <form method="get" class="controls">
+            <label>Proyecto: <input type="text" name="project" value="{{ project_filter }}"></label>
+            <label>Cliente: <input type="text" name="client" value="{{ client_filter }}"></label>
+            <label>Ordenar:
+                <select name="sort">
+                    <option value="created" {% if sort_option == 'created' %}selected{% endif %}>Creación</option>
+                    <option value="name" {% if sort_option == 'name' %}selected{% endif %}>Nombre</option>
+                </select>
+            </label>
+            <button type="submit">Filtrar</button>
+        </form>
+        <table class="projects-table" data-has-project-filter="{{ 1 if project_filter or client_filter else 0 }}">
+            <thead>
+            <tr>
+                <th class="project-delete-column">X</th>
+                <th>Nombre</th>
+                <th>Cliente</th>
+                <th>Fecha límite</th>
+                {% for col in complete_project_phase_columns %}
+                    <th data-project-phase-column="1" data-phase="{{ col.phase }}"{% if col.part is not none %} data-part="{{ col.part }}"{% endif %}>{{ col.label }}</th>
+                {% endfor %}
+                <th>Actualizar</th>
+                <th>Imagen</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for p in projects %}
+            <tr data-pid="{{ p.id }}" class="{% if p.frozen_tasks %}frozen{% endif %}">
+                <td class="project-delete-column" data-sort="0">
+                    <form method="post" action="{{ url_for('delete_project', pid=p.id, next=url_for('complete')) }}" class="delete-form">
+                        <button class="delete-btn" type="submit">&#10060;</button>
+                    </form>
+                </td>
+                <td data-sort="{{ p.name|default('', true)|lower }}">{{ project_title(p.name, p.id) }}</td>
+                <td data-sort="{{ p.client|default('', true)|lower }}">{{ p.client }}</td>
+                <td data-sort="{{ p.due_date or '' }}" data-sort-type="date">{{ p.due_date }}</td>
+                {% for col in complete_project_phase_columns %}
+                    {% set ph = col.phase %}
+                    {% set part = col.part %}
+                    {% set val = p.phases.get(ph, 0) %}
+                    {% if part is not none %}
+                        {% if val is sequence and val is not string and part < (val|length) %}
+                            {% set total = val[part]|int %}
+                        {% else %}
+                            {% set total = 0 %}
+                        {% endif %}
+                    {% elif val is sequence and val is not string %}
+                        {% set total = val|map('int')|sum %}
+                    {% else %}
+                        {% set total = val|int %}
+                    {% endif %}
+                    <td class="project-phase-cell" data-sort="{{ total }}" data-sort-type="number" data-phase="{{ ph }}"{% if part is not none %} data-part="{{ part }}"{% endif %} data-phase-total="{{ total }}">
+                    {{ total }}h<br>
+                        {% set segment_workers = p.segment_workers.get(ph, []) if p.segment_workers else [] %}
+                        {% if part is not none and segment_workers and part < (segment_workers|length) and segment_workers[part] %}
+                            {% set assigned = segment_workers[part] %}
+                        {% else %}
+                            {% set assigned = p.assigned.get(ph) if p.assigned and p.assigned.get(ph) else 'Sin planificar' %}
+                        {% endif %}
+                        <span>{{ assigned }}</span>
+                        <form class="phase-hours-form" method="post" action="{{ url_for('update_phase_hours') }}">
+                            <input type="hidden" name="pid" value="{{ p.id }}">
+                            <input type="hidden" name="phase" value="{{ ph }}">
+                            {% if part is not none %}<input type="hidden" name="part" value="{{ part }}">{% endif %}
+                            <input type="hidden" name="next" value="{{ url_for('complete') }}">
+                            <input type="number" name="hours" value="{{ total }}" min="1">
+                        </form>
+                        <span>{{ start_map.get(p.id, {}).get(ph, '') }}</span>
+                    </td>
+                {% endfor %}
+                <td data-sort="0"><button class="row-update-btn">ACTUALIZAR</button></td>
+                <td data-sort="{{ 1 if p.image else 0 }}" data-sort-type="number">
+                    {% if p.image %}
+                        {{ p.image.rsplit('/', 1)[-1] }}
+                    {% else %}
+                        &mdash;
+                    {% endif %}
+                    <form class="image-form" method="post" enctype="multipart/form-data" action="{{ url_for('update_image', pid=p.id) }}">
+                        <input type="hidden" name="next" value="{{ url_for('complete') }}">
+                        <input type="file" name="image" accept="image/*">
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+<script>
+  window.addEventListener('DOMContentLoaded', () => {
+  const PROJECT_DATA = {{ project_data|tojson }};
+  const PROJECT_ORDERS = {{ project_orders|tojson }};
+  const PHASES = {{ phases|tojson }};
+  const STATIC_URL = "{{ url_for('static', filename='') }}";
+  const MOVE_URL = "{{ url_for('move_phase') }}";
+  const DELETE_URL = "{{ url_for('delete_phase') }}";
+  const START_URL = "{{ url_for('update_phase_start') }}";
+  const PROJ_START_URL = "{{ url_for('update_start_date') }}";
+  const COMPLETE_UPDATE_URL = "{{ url_for('complete_last_movement') }}";
+  const SPLIT_URL = "{{ split_phase_url }}";
+  const UNSPLIT_URL = "{{ url_for('unsplit_phase') }}";
+  const ADD_PHASE_INSTANCE_URL = "{{ url_for('add_phase_instance') }}";
+
+  function initProjectTableSorting(root = document) {
+    const collator = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
+    root.querySelectorAll('.projects-table').forEach((table) => {
+      const tbody = table.tBodies[0];
+      if (!tbody) return;
+      const headers = table.querySelectorAll('thead th');
+      headers.forEach((th, index) => {
+        th.classList.add('sortable');
+        th.addEventListener('click', (event) => {
+          if (event.target.closest('.column-resizer')) return;
+          const order = th.dataset.sortOrder === 'asc' ? 'desc' : 'asc';
+          headers.forEach((other) => {
+            if (other !== th) {
+              other.dataset.sortOrder = '';
+              other.classList.remove('sorted-asc', 'sorted-desc');
+            }
+          });
+          th.dataset.sortOrder = order;
+          th.classList.toggle('sorted-asc', order === 'asc');
+          th.classList.toggle('sorted-desc', order === 'desc');
+          const rows = Array.from(tbody.querySelectorAll('tr'));
+          const parseCellValue = (cell) => {
+            if (!cell) {
+              return { blank: true, value: '', type: 'text' };
+            }
+            const raw = cell.dataset.sort !== undefined ? cell.dataset.sort : cell.textContent.trim();
+            const type = cell.dataset.sortType || 'text';
+            const rawString = raw === undefined || raw === null ? '' : `${raw}`;
+            const isBlank = rawString.trim() === '';
+            if (type === 'number') {
+              const num = Number(rawString);
+              return { blank: isBlank, value: Number.isNaN(num) ? 0 : num, type };
+            }
+            if (type === 'date') {
+              if (isBlank) {
+                return { blank: true, value: 0, type };
+              }
+              let time = Number.NaN;
+              if (/^\d{4}-\d{2}-\d{2}$/.test(rawString)) {
+                time = Date.parse(rawString);
+              } else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(rawString)) {
+                const [day, month, year] = rawString.split('/').map(Number);
+                if (!Number.isNaN(day) && !Number.isNaN(month) && !Number.isNaN(year)) {
+                  time = Date.UTC(year, month - 1, day);
+                }
+              } else {
+                time = Date.parse(rawString);
+              }
+              if (Number.isNaN(time)) {
+                return { blank: true, value: 0, type };
+              }
+              return { blank: false, value: time, type };
+            }
+            return { blank: isBlank, value: rawString.toLowerCase(), type: 'text' };
+          };
+          rows.sort((a, b) => {
+            const aCell = a.children[index];
+            const bCell = b.children[index];
+            const aVal = parseCellValue(aCell);
+            const bVal = parseCellValue(bCell);
+            if (aVal.blank && bVal.blank) return 0;
+            if (aVal.blank !== bVal.blank) {
+              return aVal.blank ? 1 : -1;
+            }
+            let comparison = 0;
+            if (aVal.type === 'number' && bVal.type === 'number') {
+              comparison = aVal.value - bVal.value;
+            } else if (aVal.type === 'date' && bVal.type === 'date') {
+              comparison = aVal.value - bVal.value;
+            } else {
+              comparison = collator.compare(aVal.value, bVal.value);
+            }
+            if (comparison === 0) return 0;
+            return order === 'asc' ? (comparison < 0 ? -1 : 1) : (comparison < 0 ? 1 : -1);
+          });
+          rows.forEach((row) => tbody.appendChild(row));
+        });
+      });
+    });
+  }
+
+  function initCompleteProjectsColumnResizers() {
+    const table = document.querySelector('.complete-projects .projects-table');
+    if (!table || !table.tHead || !table.tBodies.length) return;
+    const headers = Array.from(table.tHead.querySelectorAll('th'));
+    if (!headers.length) return;
+    const storageKey = `completeProjectsColumnWidths:${window.location.pathname}`;
+
+    function clearColumnWidths() {
+      headers.forEach((th) => {
+        th.style.width = '';
+        th.style.minWidth = '';
+      });
+    }
+
+    function shouldApplyStoredWidths() {
+      return table.dataset.hasProjectFilter === '1' || Boolean(table.querySelector('tbody tr.proj-highlight'));
+    }
+
+    function applyStoredWidths() {
+      if (!shouldApplyStoredWidths()) {
+        clearColumnWidths();
+        return;
+      }
+      let widths = null;
+      try {
+        widths = JSON.parse(localStorage.getItem(storageKey) || 'null');
+      } catch (err) {
+        widths = null;
+      }
+      if (!Array.isArray(widths)) return;
+      headers.forEach((th, index) => {
+        const width = Number(widths[index]);
+        if (!Number.isFinite(width) || width <= 0) return;
+        th.style.width = `${width}px`;
+        th.style.minWidth = `${width}px`;
+      });
+    }
+
+    function saveWidths() {
+      const widths = headers.map((th) => Math.round(th.getBoundingClientRect().width));
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(widths));
+      } catch (err) {
+        console.warn('No se pudo guardar el ancho de columnas de Proyectos.', err);
+      }
+    }
+
+    applyStoredWidths();
+    headers.forEach((th) => {
+      if (th.querySelector('.column-resizer')) return;
+      th.style.position = 'relative';
+      const resizer = document.createElement('span');
+      resizer.className = 'column-resizer';
+      resizer.addEventListener('click', (event) => event.stopPropagation());
+      resizer.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const startX = event.clientX;
+        const startWidth = th.getBoundingClientRect().width;
+        table.classList.add('resizable-table--active');
+        resizer.setPointerCapture(event.pointerId);
+
+        function onPointerMove(moveEvent) {
+          const nextWidth = Math.max(70, startWidth + moveEvent.clientX - startX);
+          th.style.width = `${nextWidth}px`;
+          th.style.minWidth = `${nextWidth}px`;
+        }
+
+        function onPointerUp(upEvent) {
+          resizer.releasePointerCapture(upEvent.pointerId);
+          resizer.removeEventListener('pointermove', onPointerMove);
+          resizer.removeEventListener('pointerup', onPointerUp);
+          resizer.removeEventListener('pointercancel', onPointerUp);
+          table.classList.remove('resizable-table--active');
+          saveWidths();
+        }
+
+        resizer.addEventListener('pointermove', onPointerMove);
+        resizer.addEventListener('pointerup', onPointerUp);
+        resizer.addEventListener('pointercancel', onPointerUp);
+      });
+      th.appendChild(resizer);
+    });
+  }
+
+  initProjectTableSorting();
+  initCompleteProjectsColumnResizers();
+  const REMOVE_ARCHIVED_URL = "{{ url_for('remove_archived_phase') }}";
+  const HOURS_URL = "{{ url_for('update_hours') }}";
+  const OPTIONAL_PHASE_TOGGLE_URL = "{{ url_for('toggle_optional_phases') }}";
+  const PHASE_HOURS_URL = "{{ url_for('update_phase_hours') }}";
+  const ROW_URL = "{{ url_for('update_project_row') }}";
+  const WORKER_NOTE_URL = "{{ url_for('update_worker_note') }}";
+  const CALENDAR_NOTE_URL = "{{ url_for('update_calendar_note') }}";
+  const OBS_URL_TEMPLATE = "{{ url_for('update_observations', pid='__PID__') }}";
+  const MANUAL_REORDER_URL = "{{ url_for('manual_bucket_reorder_route') }}";
+  const CALENDAR_PEDIDOS_URL = "{{ url_for('calendar_pedidos') }}";
+  const HISTORY_URL = "{{ url_for('phase_history') }}";
+  const ASSIGN_VACATION_DAY_URL = "{{ url_for('assign_vacation_day') }}";
+  const DEACTIVATE_WORKER_DAY_URL = "{{ url_for('deactivate_worker_day') }}";
+  const REMOVE_DEACTIVATED_WORKER_URL = "{{ url_for('remove_deactivated_worker') }}";
+  const UPDATE_WORKER_DAY_HOURS_URL = "{{ url_for('update_worker_day_hours') }}";
+  const PLANNER_TOP_NOTES_KEY = `plannerTopNotes:${window.location.pathname}`;
+  const ADD_PROJECT_INLINE_URL = "{{ url_for('add_project_inline') }}";
+  const TOGGLE_TRANSPORT_VISIBILITY_URL = "{{ url_for('toggle_transport_visibility') }}";
+  const TOGGLE_URGENT_URL_TEMPLATE = "{{ url_for('toggle_urgent', pid='__PID__') }}";
+  const TOGGLE_LAUNCHED_URL_TEMPLATE = "{{ url_for('toggle_launched', pid='__PID__') }}";
+  const KANBAN_ATTACHMENT_PROXY_URL = "{{ url_for('kanban_attachment_proxy') }}";
+  const WORKER_DAY_HOURS = {{ worker_day_hours|tojson }};
+  const COMPLETE_TOP_WIDTHS_KEY = `completeTopPanelWidths:${window.location.pathname}`;
+
+  function initCompleteTopPanelResizers() {
+    const container = document.querySelector('.complete-top');
+    if (!container) return;
+    const panels = Array.from(container.querySelectorAll('.complete-top-panel'));
+    const resizers = Array.from(container.querySelectorAll('.complete-top-resizer'));
+    if (panels.length !== 3 || resizers.length !== 2) return;
+
+    const minPanelWidth = 220;
+
+    function saveWidths() {
+      const containerWidth = container.getBoundingClientRect().width;
+      if (!containerWidth) return;
+      const widths = panels.map((panel) => panel.getBoundingClientRect().width / containerWidth);
+      try {
+        localStorage.setItem(COMPLETE_TOP_WIDTHS_KEY, JSON.stringify(widths));
+      } catch (err) {
+        console.warn('No se pudo guardar el ancho de los bloques superiores.', err);
+      }
+    }
+
+    function applySavedWidths() {
+      let widths = null;
+      try {
+        widths = JSON.parse(localStorage.getItem(COMPLETE_TOP_WIDTHS_KEY) || 'null');
+      } catch (err) {
+        widths = null;
+      }
+      if (!Array.isArray(widths) || widths.length !== panels.length) return;
+      widths.forEach((width, index) => {
+        const numericWidth = Number(width);
+        if (!Number.isFinite(numericWidth) || numericWidth <= 0) return;
+        panels[index].style.flexBasis = `${Math.max(numericWidth * 100, 10)}%`;
+      });
+    }
+
+    applySavedWidths();
+
+    resizers.forEach((resizer, index) => {
+      resizer.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        const leftPanel = panels[index];
+        const rightPanel = panels[index + 1];
+        if (!leftPanel || !rightPanel) return;
+        const startX = event.clientX;
+        const leftStart = leftPanel.getBoundingClientRect().width;
+        const rightStart = rightPanel.getBoundingClientRect().width;
+        const pairTotal = leftStart + rightStart;
+        document.body.classList.add('complete-top-resizing');
+        resizer.setPointerCapture(event.pointerId);
+
+        function onPointerMove(moveEvent) {
+          const delta = moveEvent.clientX - startX;
+          let nextLeft = leftStart + delta;
+          let nextRight = rightStart - delta;
+          if (nextLeft < minPanelWidth) {
+            nextLeft = minPanelWidth;
+            nextRight = pairTotal - nextLeft;
+          }
+          if (nextRight < minPanelWidth) {
+            nextRight = minPanelWidth;
+            nextLeft = pairTotal - nextRight;
+          }
+          if (nextLeft < minPanelWidth || nextRight < minPanelWidth) return;
+          leftPanel.style.flexBasis = `${nextLeft}px`;
+          rightPanel.style.flexBasis = `${nextRight}px`;
+        }
+
+        function onPointerUp(upEvent) {
+          resizer.releasePointerCapture(upEvent.pointerId);
+          resizer.removeEventListener('pointermove', onPointerMove);
+          resizer.removeEventListener('pointerup', onPointerUp);
+          resizer.removeEventListener('pointercancel', onPointerUp);
+          document.body.classList.remove('complete-top-resizing');
+          saveWidths();
+        }
+
+        resizer.addEventListener('pointermove', onPointerMove);
+        resizer.addEventListener('pointerup', onPointerUp);
+        resizer.addEventListener('pointercancel', onPointerUp);
+      });
+    });
+  }
+
+  function initPlannerTopNotes() {
+    const notesInput = document.getElementById('planner-top-notes-input');
+    if (!notesInput) return;
+    try {
+      const saved = localStorage.getItem(PLANNER_TOP_NOTES_KEY);
+      if (saved !== null) notesInput.value = saved;
+    } catch (err) {
+      console.warn('No se pudo cargar la nota superior.', err);
+    }
+    notesInput.addEventListener('input', () => {
+      try {
+        localStorage.setItem(PLANNER_TOP_NOTES_KEY, notesInput.value || '');
+      } catch (err) {
+        console.warn('No se pudo guardar la nota superior.', err);
+      }
+    });
+  }
+
+  function setupSummaryPdfBackupButton() {
+    const button = document.getElementById('summary-pdf-btn');
+    if (!button) return;
+    const originalText = button.textContent;
+
+    function filenameFromDisposition(disposition) {
+      if (!disposition) return 'resumen.pdf';
+      const match = disposition.match(/filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i);
+      const rawName = match && (match[1] || match[2]);
+      return rawName ? decodeURIComponent(rawName) : 'resumen.pdf';
+    }
+
+    function downloadPdf(blob, filename) {
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    }
+
+    button.addEventListener('click', () => {
+      const url = button.dataset.backupUrl;
+      if (!url) return;
+      button.disabled = true;
+      button.textContent = 'Generando PDF + backup...';
+      fetch(url, { method: 'POST', credentials: 'same-origin' })
+        .then(async (resp) => {
+          const contentType = resp.headers.get('Content-Type') || '';
+          if (!resp.ok) {
+            if (contentType.includes('application/json')) {
+              const data = await resp.json();
+              throw new Error(data.error || 'No se pudo generar el PDF + backup.');
+            }
+            throw new Error(await resp.text() || 'No se pudo generar el PDF + backup.');
+          }
+          if (contentType.includes('application/json')) {
+            const data = await resp.json();
+            if (data.error) throw new Error(data.error);
+          }
+          const blob = await resp.blob();
+          const filename = filenameFromDisposition(resp.headers.get('Content-Disposition'));
+          downloadPdf(blob, filename);
+          const backupFilename = resp.headers.get('X-Backup-Filename');
+          alert(backupFilename ? `PDF generado y backup guardado: ${backupFilename}` : 'PDF generado y backup guardado correctamente.');
+        })
+        .catch((err) => {
+          alert(err.message || 'No se pudo generar el PDF + backup.');
+        })
+        .finally(() => {
+          button.disabled = false;
+          button.textContent = originalText;
+        });
+    });
+  }
+
+  initCompleteTopPanelResizers();
+  initPlannerTopNotes();
+  setupSummaryPdfBackupButton();
+
+  const DAILY_HOURS = {{ hours|tojson }};
+  const START_DATA = {{ start_map|tojson }};
+
+  function resolveProjectEntry(pid) {
+    const candidates = [pid, String(pid), Number(pid)];
+    for (const key of candidates) {
+      if (key === undefined || key === null) continue;
+      if (Object.prototype.hasOwnProperty.call(PROJECT_DATA, key)) {
+        return PROJECT_DATA[key] || {};
+      }
+    }
+    return {};
+  }
+
+  function resolveStartMap(pid) {
+    const candidates = [pid, String(pid), Number(pid)];
+    for (const key of candidates) {
+      if (key === undefined || key === null) continue;
+      if (Object.prototype.hasOwnProperty.call(START_DATA, key)) {
+        return START_DATA[key] || {};
+      }
+    }
+    return {};
+  }
+  const LAST_KEY = 'lastMoved';
+  const SCROLL_KEY2 = 'scrollDate';
+  const TALLER_REFRESH_KEY = 'taller:refresh';
+  const splitModal = document.getElementById('split-modal');
+  const splitForm = document.getElementById('split-form');
+  const splitPartsContainer = document.getElementById('split-parts-container');
+  const splitAddPartButton = document.getElementById('split-add-part');
+  const splitTotalDisplay = document.getElementById('split-total-hours');
+  let splitRemainderInput = null;
+  const blockModal = document.getElementById('block-modal');
+  const blockText = document.getElementById('block-text');
+  const blockUnfreeze = document.getElementById('block-unfreeze');
+  const blockSkip = document.getElementById('block-skip');
+  const blockCancel = document.getElementById('block-cancel');
+  const historyModal = document.getElementById('history-modal');
+  const historyList = document.getElementById('history-list');
+  const historyClose = historyModal ? historyModal.querySelector('.history-close') : null;
+  const historyTitle = document.getElementById('history-title');
+  let detachHistoryViewport = null;
+  let historyPositionFrame = null;
+
+  function centerHistoryModalNow() {
+    if (!historyModal || !historyModal.classList.contains('open')) return;
+    const content = historyModal.querySelector('.history-content');
+    if (!content) return;
+    const viewport = window.visualViewport || null;
+    let viewportWidth = window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0;
+    let viewportHeight = window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0;
+    let offsetLeft = 0;
+    let offsetTop = 0;
+    if (viewport) {
+      viewportWidth = viewport.width;
+      viewportHeight = viewport.height;
+      offsetLeft = viewport.offsetLeft || viewport.pageLeft || viewport.left || 0;
+      offsetTop = viewport.offsetTop || viewport.pageTop || viewport.top || 0;
+    }
+    const contentWidth = content.offsetWidth;
+    const contentHeight = content.offsetHeight;
+    const safePadding = 16;
+    const targetLeft = offsetLeft + Math.max((viewportWidth - contentWidth) / 2, safePadding);
+    const targetTop = offsetTop + Math.max((viewportHeight - contentHeight) / 2, safePadding);
+    content.style.position = 'fixed';
+    content.style.left = `${Math.round(targetLeft)}px`;
+    content.style.top = `${Math.round(targetTop)}px`;
+  }
+
+  function scheduleHistoryModalCenter() {
+    if (!historyModal || !historyModal.classList.contains('open')) return;
+    if (historyPositionFrame !== null) return;
+    historyPositionFrame = requestAnimationFrame(() => {
+      historyPositionFrame = null;
+      centerHistoryModalNow();
+    });
+  }
+
+  function bindHistoryViewportTracking() {
+    if (!historyModal || detachHistoryViewport) return;
+    const viewport = window.visualViewport || null;
+    const handler = () => scheduleHistoryModalCenter();
+    window.addEventListener('resize', handler);
+    window.addEventListener('scroll', handler, { passive: true });
+    if (viewport) {
+      viewport.addEventListener('resize', handler);
+      viewport.addEventListener('scroll', handler);
+    }
+    detachHistoryViewport = () => {
+      window.removeEventListener('resize', handler);
+      window.removeEventListener('scroll', handler);
+      if (viewport) {
+        viewport.removeEventListener('resize', handler);
+        viewport.removeEventListener('scroll', handler);
+      }
+      detachHistoryViewport = null;
+    };
+  }
+
+  const dayMenuModal = document.getElementById('day-menu-modal');
+  const dayMenuClose = dayMenuModal ? dayMenuModal.querySelector('.day-menu-close') : null;
+  const dayMenuTitle = document.getElementById('day-menu-title');
+  const dayMenuVacationBtn = document.getElementById('day-menu-vacation');
+  const dayMenuDeactivateBtn = document.getElementById('day-menu-deactivate');
+  const dayMenuHoursBtn = document.getElementById('day-menu-hours-btn');
+  const dayMenuHourSelect = document.getElementById('day-menu-hour-select');
+  const dayMenuAddProjectBtn = document.getElementById('day-menu-add-project');
+  const addProjectInlineModal = document.getElementById('add-project-inline-modal');
+  const addProjectInlineClose = document.getElementById('add-project-inline-close');
+  const addProjectInlineForm = document.getElementById('add-project-inline-form');
+  const addProjectTargetWorkerInput = document.getElementById('add-project-target-worker');
+  const addProjectTargetDateInput = document.getElementById('add-project-target-date');
+  let dayMenuWorker = null;
+  let dayMenuDate = null;
+  const dayMenuFormatter = typeof Intl !== 'undefined'
+    ? new Intl.DateTimeFormat('es-ES', {
+        timeZone: window.EFIMERO_TZ || 'Europe/Madrid',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      })
+    : null;
+  let pendingBlock = null;
+  const SPLIT_WORKDAY_HOURS = 8;
+  const SPLIT_ORDINAL_WORDS = ['primera', 'segunda', 'tercera', 'cuarta', 'quinta', 'sexta', 'séptima', 'octava', 'novena', 'décima'];
+
+  const NO_BORDER_WORKERS = new Set(['Mecanizar', 'Tratamiento']);
+  const NO_BORDER_PHASES = new Set(['vacaciones', 'mecanizar', 'tratamiento']);
+
+  function defaultDayHours(dateText) {
+    if (!dateText) return 8;
+    const dt = new Date(`${dateText}T00:00:00`);
+    if (!Number.isNaN(dt.valueOf()) && dt.getDay() === 5) {
+      return 7;
+    }
+    return 8;
+  }
+
+  function getWorkerDayLimit(worker, dateText) {
+    if (WORKER_DAY_HOURS && WORKER_DAY_HOURS[worker] && WORKER_DAY_HOURS[worker][dateText] !== undefined) {
+      const parsed = Number(WORKER_DAY_HOURS[worker][dateText]);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    if (DAILY_HOURS && DAILY_HOURS[dateText] !== undefined) {
+      const parsed = Number(DAILY_HOURS[dateText]);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return defaultDayHours(dateText);
+  }
+
+  function findWorkerRow(worker) {
+    if (!worker) return null;
+    return Array.from(document.querySelectorAll('tr[data-worker]')).find(row => row.dataset.worker === worker) || null;
+  }
+
+  function findWorkerDayCell(worker, dateText) {
+    if (!worker || !dateText) return null;
+    const row = findWorkerRow(worker);
+    if (!row) return null;
+    return Array.from(row.querySelectorAll('td[data-date]')).find(td => td.dataset.date === dateText) || null;
+  }
+
+  function recomputeWorkerDayCell(worker, dateText) {
+    const cell = findWorkerDayCell(worker, dateText);
+    if (!cell) return;
+    const tasks = Array.from(cell.querySelectorAll('.task'));
+    let total = 0;
+    let hasNoBorderPhase = NO_BORDER_WORKERS.has(worker);
+    tasks.forEach(task => {
+      const phase = (task.dataset.phase || '').toLowerCase();
+      if (NO_BORDER_PHASES.has(phase)) {
+        hasNoBorderPhase = true;
+      }
+      const hoursVal = Number(task.dataset.hours);
+      if (Number.isFinite(hoursVal)) {
+        total += hoursVal;
+      }
+    });
+    const limit = getWorkerDayLimit(worker, dateText);
+    if (hasNoBorderPhase) {
+      cell.classList.add('vacation-day');
+      cell.classList.remove('incomplete');
+      return;
+    }
+    cell.classList.remove('vacation-day');
+    if (total < limit) {
+      cell.classList.add('incomplete');
+    } else {
+      cell.classList.remove('incomplete');
+    }
+  }
+
+  function clampDayHours(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 8;
+    if (num < 1) return 1;
+    if (num > 10) return 10;
+    return Math.round(num);
+  }
+
+  function formatDayMenuLabel(dateText, worker) {
+    if (!dateText) {
+      return worker || '';
+    }
+    if (dayMenuFormatter) {
+      try {
+        const dt = new Date(`${dateText}T00:00:00`);
+        if (!Number.isNaN(dt.valueOf())) {
+          return `${dayMenuFormatter.format(dt)} - ${worker}`;
+        }
+      } catch (err) {
+        // ignore formatting errors
+      }
+    }
+    return `${dateText} - ${worker}`;
+  }
+
+  function getWorkerDayHours(worker, dateText) {
+    if (WORKER_DAY_HOURS && WORKER_DAY_HOURS[worker] && WORKER_DAY_HOURS[worker][dateText] !== undefined) {
+      const parsed = Number(WORKER_DAY_HOURS[worker][dateText]);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    if (DAILY_HOURS && DAILY_HOURS[dateText] !== undefined) {
+      const parsed = Number(DAILY_HOURS[dateText]);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return defaultDayHours(dateText);
+  }
+
+  function openDayMenu(worker, dateText) {
+    if (!dayMenuModal) return;
+    dayMenuWorker = worker;
+    dayMenuDate = dateText;
+    if (dayMenuTitle) {
+      dayMenuTitle.textContent = formatDayMenuLabel(dateText, worker);
+    }
+    if (dayMenuHourSelect) {
+      const hoursValue = clampDayHours(getWorkerDayHours(worker, dateText));
+      dayMenuHourSelect.value = String(hoursValue);
+    }
+    dayMenuModal.classList.add('open');
+    dayMenuModal.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeDayMenu() {
+    if (!dayMenuModal) return;
+    dayMenuModal.classList.remove('open');
+    dayMenuModal.setAttribute('aria-hidden', 'true');
+    dayMenuWorker = null;
+    dayMenuDate = null;
+  }
+
+  function submitDayMenuAction(url, payload, button, errorMessage) {
+    if (!url) return;
+    if (button) {
+      button.disabled = true;
+    }
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(resp => {
+        if (!resp.ok) {
+          throw new Error('request failed');
+        }
+        closeDayMenu();
+        window.location.reload();
+      })
+      .catch(() => {
+        alert(errorMessage);
+      })
+      .finally(() => {
+        if (button) {
+          button.disabled = false;
+        }
+      });
+  }
+
+  function escapeHtml(value) {
+    if (value === undefined || value === null) return '';
+    return value
+      .toString()
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderProjectOrdersSection(pid) {
+    const orders = PROJECT_ORDERS[String(pid)] || [];
+    if (!Array.isArray(orders) || !orders.length) return '';
+    const lines = orders
+      .map((order) => {
+        const title = escapeHtml(order && order.title ? order.title : 'Pedido sin nombre');
+        const orderDate = escapeHtml(order && order.order_date ? order.order_date : 'Sin fecha pedido');
+        return `<li>${title} <span class="popup-order-date">(${orderDate})</span></li>`;
+      })
+      .join('');
+    return `<div class="popup-section popup-orders"><strong>Pedidos</strong><ul>${lines}</ul></div>`;
+  }
+
+  function normalizePartValue(value) {
+    if (value === undefined || value === null) return '';
+    const text = `${value}`.trim();
+    if (!text) return '';
+    const lower = text.toLowerCase();
+    if (lower === 'none' || lower === 'null' || lower === 'undefined') return '';
+    return text;
+  }
+
+  function formatPartSuffix(value) {
+    const normalized = normalizePartValue(value);
+    if (!normalized) return '';
+    const num = Number(normalized);
+    if (!Number.isFinite(num)) return '';
+    return ` (${Math.trunc(num) + 1})`;
+  }
+
+  const historyTimestampFormatter = typeof Intl !== 'undefined'
+    ? new Intl.DateTimeFormat('es-ES', {
+        timeZone: window.EFIMERO_TZ || 'Europe/Madrid',
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : null;
+
+  function formatHistoryTimestamp(value) {
+    if (!value) return '';
+    if (!historyTimestampFormatter) return value;
+    try {
+      const dt = new Date(value);
+      if (Number.isNaN(dt.valueOf())) return value;
+      return historyTimestampFormatter.format(dt);
+    } catch (err) {
+      return value;
+    }
+  }
+
+  function formatHistoryDay(value) {
+    if (!value) return 'Sin planificar';
+    const parts = `${value}`.split('-');
+    if (parts.length < 3) return value;
+    const month = parts[1].split('T')[0].padStart(2, '0');
+    const dayPart = parts[2].split('T')[0];
+    const day = dayPart.padStart(2, '0');
+    return `${day}/${month}`;
+  }
+
+  function formatHistoryWorker(value) {
+    const text = value === undefined || value === null ? '' : `${value}`.trim();
+    return text || 'Sin planificar';
+  }
+
+  function closeHistoryModal() {
+    if (!historyModal) return;
+    historyModal.classList.remove('open');
+    if (historyPositionFrame !== null) {
+      cancelAnimationFrame(historyPositionFrame);
+      historyPositionFrame = null;
+    }
+    if (detachHistoryViewport) {
+      detachHistoryViewport();
+    }
+    const content = historyModal.querySelector('.history-content');
+    if (content) {
+      content.style.left = '';
+      content.style.top = '';
+      content.style.position = '';
+    }
+  }
+
+  function renderHistoryEntries(entries) {
+    if (!historyList) return;
+    if (!Array.isArray(entries) || !entries.length) {
+      historyList.innerHTML = '<div class="history-empty">No hay movimientos registrados.</div>';
+      scheduleHistoryModalCenter();
+      return;
+    }
+    const html = entries
+      .map(entry => {
+        const ts = formatHistoryTimestamp(entry.timestamp);
+        const fromDay = formatHistoryDay(entry.from_day);
+        const toDay = formatHistoryDay(entry.to_day);
+        const fromWorker = formatHistoryWorker(entry.from_worker);
+        const toWorker = formatHistoryWorker(entry.to_worker);
+        return `
+          <div class="history-entry">
+            <div class="history-entry-time">${ts}</div>
+            <div class="history-entry-body">De <strong>${fromDay}</strong> (${fromWorker}) a <strong>${toDay}</strong> (${toWorker})</div>
+          </div>
+        `;
+      })
+      .join('');
+    historyList.innerHTML = html;
+    scheduleHistoryModalCenter();
+  }
+
+  function openHistory(pid, phase, part, projectName, clientName) {
+    if (!historyModal || !historyList || !HISTORY_URL) return;
+    const pieces = [];
+    if (projectName) pieces.push(projectName);
+    if (clientName) pieces.push(clientName);
+    const baseTitle = pieces.length ? pieces.join(' - ') : 'Historial';
+    if (historyTitle) {
+      const phaseLabel = phase ? `${phase}${formatPartSuffix(part)}` : '';
+      const suffix = phaseLabel ? ` (${phaseLabel})` : '';
+      historyTitle.textContent = `Historial - ${baseTitle}${suffix}`;
+    }
+    historyModal.classList.add('open');
+    bindHistoryViewportTracking();
+    historyList.innerHTML = '<div class="history-loading">Cargando...</div>';
+    scheduleHistoryModalCenter();
+    const params = new URLSearchParams({ pid, phase });
+    if (part) params.append('part', part);
+    fetch(`${HISTORY_URL}?${params.toString()}`, {
+      method: 'GET',
+      credentials: 'same-origin',
+    })
+      .then(resp => (resp.ok ? resp.json() : Promise.reject()))
+      .then(data => {
+        const entries = Array.isArray(data.history) ? data.history : [];
+        renderHistoryEntries(entries);
+        scheduleHistoryModalCenter();
+      })
+      .catch(() => {
+        if (historyList) {
+          historyList.innerHTML = '<div class="history-error">No se pudo cargar el historial.</div>';
+        }
+        scheduleHistoryModalCenter();
+      });
+  }
+
+  if (historyClose) {
+    historyClose.addEventListener('click', ev => {
+      ev.stopPropagation();
+      closeHistoryModal();
+    });
+  }
+  if (historyModal) {
+    historyModal.addEventListener('click', ev => {
+      if (ev.target === historyModal) closeHistoryModal();
+    });
+    const historyContent = historyModal.querySelector('.history-content');
+    if (historyContent) {
+      historyContent.addEventListener('click', ev => ev.stopPropagation());
+    }
+  }
+  function openAddProjectInlineModal(options = {}) {
+    if (!addProjectInlineModal) return;
+    const useDayTarget = options.useDayTarget === true;
+    addProjectInlineModal.classList.add('open');
+    addProjectInlineModal.setAttribute('aria-hidden', 'false');
+    if (addProjectInlineForm) addProjectInlineForm.reset();
+    if (addProjectTargetWorkerInput) addProjectTargetWorkerInput.value = useDayTarget ? (dayMenuWorker || '') : '';
+    if (addProjectTargetDateInput) addProjectTargetDateInput.value = useDayTarget ? (dayMenuDate || '') : '';
+  }
+
+  function closeAddProjectInlineModal() {
+    if (!addProjectInlineModal) return;
+    addProjectInlineModal.classList.remove('open');
+    addProjectInlineModal.setAttribute('aria-hidden', 'true');
+  }
+
+  if (dayMenuClose) {
+    dayMenuClose.addEventListener('click', ev => {
+      ev.preventDefault();
+      closeDayMenu();
+    });
+  }
+  if (dayMenuModal) {
+    dayMenuModal.addEventListener('click', ev => {
+      if (ev.target === dayMenuModal) {
+        closeDayMenu();
+      }
+    });
+    const dayMenuContent = dayMenuModal.querySelector('.day-menu-content');
+    if (dayMenuContent) {
+      dayMenuContent.addEventListener('click', ev => ev.stopPropagation());
+    }
+  }
+  if (dayMenuVacationBtn) {
+    dayMenuVacationBtn.addEventListener('click', () => {
+      if (!dayMenuWorker || !dayMenuDate) return;
+      submitDayMenuAction(
+        ASSIGN_VACATION_DAY_URL,
+        { worker: dayMenuWorker, date: dayMenuDate },
+        dayMenuVacationBtn,
+        'No se pudo asignar las vacaciones.'
+      );
+    });
+  }
+  if (dayMenuDeactivateBtn) {
+    dayMenuDeactivateBtn.addEventListener('click', () => {
+      if (!dayMenuWorker || !dayMenuDate) return;
+      submitDayMenuAction(
+        DEACTIVATE_WORKER_DAY_URL,
+        { worker: dayMenuWorker, date: dayMenuDate },
+        dayMenuDeactivateBtn,
+        'No se pudo desactivar el recurso.'
+      );
+    });
+  }
+  if (dayMenuHoursBtn) {
+    dayMenuHoursBtn.addEventListener('click', () => {
+      if (!dayMenuWorker || !dayMenuDate || !dayMenuHourSelect) return;
+      const selected = clampDayHours(dayMenuHourSelect.value);
+      submitDayMenuAction(
+        UPDATE_WORKER_DAY_HOURS_URL,
+        { worker: dayMenuWorker, date: dayMenuDate, hours: selected },
+        dayMenuHoursBtn,
+        'No se pudo actualizar la jornada.'
+      );
+    });
+  }
+  if (dayMenuHourSelect) {
+    dayMenuHourSelect.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter' && dayMenuHoursBtn) {
+        ev.preventDefault();
+        dayMenuHoursBtn.click();
+      }
+    });
+  }
+  if (dayMenuAddProjectBtn) {
+    dayMenuAddProjectBtn.addEventListener('click', () => {
+      openAddProjectInlineModal({ useDayTarget: true });
+    });
+  }
+  if (addProjectInlineClose) {
+    addProjectInlineClose.addEventListener('click', ev => {
+      ev.preventDefault();
+      closeAddProjectInlineModal();
+    });
+  }
+  if (addProjectInlineModal) {
+    addProjectInlineModal.addEventListener('click', ev => {
+      if (ev.target === addProjectInlineModal) closeAddProjectInlineModal();
+    });
+  }
+  if (addProjectInlineForm) {
+    addProjectInlineForm.addEventListener('submit', ev => {
+      ev.preventDefault();
+      const fd = new FormData(addProjectInlineForm);
+      if (addProjectTargetWorkerInput && addProjectTargetDateInput && addProjectTargetWorkerInput.value && addProjectTargetDateInput.value) {
+        const targetWorker = addProjectTargetWorkerInput.value;
+        const targetDate = addProjectTargetDateInput.value;
+        const targetCell = findWorkerDayCell(targetWorker, targetDate);
+        let used = 0;
+        if (targetCell) {
+          targetCell.querySelectorAll('.task').forEach(task => {
+            const val = Number(task.dataset.hours);
+            if (Number.isFinite(val)) used += val;
+          });
+        }
+        const dayLimit = getWorkerDayLimit(targetWorker, targetDate);
+        const isFull = used >= dayLimit;
+        fd.set('target_worker', isFull ? 'Sin planificar' : targetWorker);
+        fd.set('target_date', isFull ? '' : targetDate);
+      }
+      fetch(ADD_PROJECT_INLINE_URL, {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin'
+      })
+        .then(resp => resp.json().then(data => ({ ok: resp.ok, data })).catch(() => ({ ok: resp.ok, data: {} })))
+        .then(({ ok, data }) => {
+          if (!ok) throw new Error(data.error || 'No se pudo crear el proyecto');
+          closeAddProjectInlineModal();
+          closeDayMenu();
+          sessionStorage.setItem('scroll:' + location.pathname, String(window.scrollY));
+          window.location.reload();
+        })
+        .catch(error => {
+          alert(error.message || 'No se pudo crear el proyecto');
+        });
+    });
+  }
+  document.querySelectorAll('.schedule').forEach(table => {
+    table.addEventListener('contextmenu', ev => {
+      const cell = ev.target.closest('td[data-date]');
+      if (!cell) {
+        return;
+      }
+      const row = cell.closest('tr[data-worker]');
+      if (!row) {
+        return;
+      }
+      ev.preventDefault();
+      if (skipNextDayMenu) {
+        skipNextDayMenu = false;
+        if (skipDayMenuReset) {
+          clearTimeout(skipDayMenuReset);
+          skipDayMenuReset = null;
+        }
+        return;
+      }
+      openDayMenu(row.dataset.worker, cell.dataset.date);
+    });
+  });
+  document.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') {
+      closeHistoryModal();
+      closeDayMenu();
+      closeAddProjectInlineModal();
+    }
+  });
+
+  function parseSplitHours(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  }
+
+  function toSplitInputValue(value) {
+    if (!Number.isFinite(value)) return '';
+    const rounded = Math.round(value * 100) / 100;
+    if (Number.isInteger(rounded)) return `${rounded}`;
+    return rounded.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  }
+
+  function formatSplitNumber(value) {
+    if (!Number.isFinite(value)) return '';
+    const rounded = Math.round(value * 100) / 100;
+    if (Number.isInteger(rounded)) return `${rounded}`;
+    return rounded.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  }
+
+  function formatSplitDuration(value) {
+    if (!Number.isFinite(value)) return '';
+    const total = value < 0 ? 0 : value;
+    const days = Math.floor(total / SPLIT_WORKDAY_HOURS);
+    const remainderRaw = total - (days * SPLIT_WORKDAY_HOURS);
+    const remainder = Math.round(remainderRaw * 100) / 100;
+    const parts = [];
+    if (days > 0) parts.push(`${days} día${days === 1 ? '' : 's'}`);
+    if (remainder > 0 || parts.length === 0) {
+      const hoursText = formatSplitNumber(remainder);
+      const hoursLabel = remainder === 1 ? 'hora' : 'horas';
+      parts.push(`${hoursText} ${hoursLabel}`);
+    }
+    return parts.join(' y ');
+  }
+
+  function formatSplitHint(value) {
+    const duration = formatSplitDuration(value);
+    return duration ? `(${duration})` : '';
+  }
+
+  function splitOrdinalLabel(index) {
+    if (!Number.isInteger(index) || index < 0) return 'Horas parte';
+    if (index < SPLIT_ORDINAL_WORDS.length) {
+      return `Horas ${SPLIT_ORDINAL_WORDS[index]} parte`;
+    }
+    return `Horas parte ${index + 1}`;
+  }
+
+  function getSplitManualInputs() {
+    if (!splitPartsContainer) return [];
+    return Array.from(
+      splitPartsContainer.querySelectorAll('input.split-part-input[data-manual="true"]')
+    );
+  }
+
+  function ensureSplitRemainderInput() {
+    if (!splitPartsContainer) return null;
+    if (splitRemainderInput && splitRemainderInput.isConnected) {
+      return splitRemainderInput;
+    }
+    const row = document.createElement('div');
+    row.className = 'split-part-row split-remainder-row';
+    const label = document.createElement('label');
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'split-part-label';
+    label.appendChild(labelSpan);
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.readOnly = true;
+    input.tabIndex = -1;
+    input.className = 'split-part-input split-part-remainder';
+    input.dataset.manual = 'false';
+    label.appendChild(input);
+    const hint = document.createElement('span');
+    hint.className = 'split-hours-hint';
+    label.appendChild(hint);
+    row.appendChild(label);
+    splitPartsContainer.appendChild(row);
+    input._hintElement = hint;
+    input._labelElement = labelSpan;
+    splitRemainderInput = input;
+    return splitRemainderInput;
+  }
+
+  function refreshSplitPartLabels() {
+    const manuals = getSplitManualInputs();
+    manuals.forEach((input, idx) => {
+      if (input && input._labelElement) {
+        input._labelElement.textContent = `${splitOrdinalLabel(idx)}:`;
+      }
+    });
+    if (splitRemainderInput && splitRemainderInput._labelElement) {
+      splitRemainderInput._labelElement.textContent = `${splitOrdinalLabel(manuals.length)}:`;
+    }
+  }
+
+  function createSplitPartRow(initialValue, beforeElement) {
+    if (!splitPartsContainer) return null;
+    const row = document.createElement('div');
+    row.className = 'split-part-row';
+    const label = document.createElement('label');
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'split-part-label';
+    label.appendChild(labelSpan);
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '1';
+    input.step = '1';
+    input.required = true;
+    input.className = 'split-part-input';
+    input.dataset.manual = 'true';
+    if (initialValue !== null && Number.isFinite(initialValue) && initialValue > 0) {
+      input.value = toSplitInputValue(initialValue);
+    }
+    input.addEventListener('input', () => {
+      input.classList.remove('split-input-error');
+      updateSplitModalDisplay();
+    });
+    label.appendChild(input);
+    const hint = document.createElement('span');
+    hint.className = 'split-hours-hint';
+    label.appendChild(hint);
+    row.appendChild(label);
+    input._hintElement = hint;
+    input._labelElement = labelSpan;
+    if (beforeElement) {
+      splitPartsContainer.insertBefore(row, beforeElement);
+    } else {
+      splitPartsContainer.appendChild(row);
+    }
+    return input;
+  }
+
+  function resetSplitParts(existingParts) {
+    if (!splitPartsContainer) return;
+    splitPartsContainer.innerHTML = '';
+    splitRemainderInput = null;
+    const normalized = Array.isArray(existingParts)
+      ? existingParts
+          .map(value => parseSplitHours(value))
+          .filter(value => Number.isFinite(value) && value > 0)
+      : [];
+    let manualValues = [];
+    let remainderValue = null;
+    if (normalized.length >= 2) {
+      manualValues = normalized.slice(0, normalized.length - 1);
+      remainderValue = normalized[normalized.length - 1];
+    } else if (normalized.length === 1) {
+      manualValues = [normalized[0]];
+    }
+    if (!manualValues.length) {
+      manualValues = [null];
+    }
+    manualValues.forEach(value => {
+      createSplitPartRow(value, null);
+    });
+    const remainder = ensureSplitRemainderInput();
+    if (remainder) {
+      if (remainderValue !== null) {
+        remainder.value = toSplitInputValue(remainderValue);
+      } else {
+        remainder.value = '';
+      }
+    }
+    refreshSplitPartLabels();
+    updateSplitModalDisplay();
+  }
+
+  function updateSplitModalDisplay() {
+    if (!splitModal) return;
+    const total = parseSplitHours(splitModal.dataset.totalHours);
+    if (splitTotalDisplay) {
+      if (total === null) {
+        splitTotalDisplay.textContent = '';
+      } else {
+        const baseNumber = formatSplitNumber(total);
+        const hoursLabel = total === 1 ? 'hora' : 'horas';
+        const duration = formatSplitDuration(total);
+        splitTotalDisplay.textContent = `Total fase: ${baseNumber} ${hoursLabel}${duration ? ` (${duration})` : ''}`;
+      }
+    }
+    const manuals = getSplitManualInputs();
+    let manualSum = 0;
+    manuals.forEach(input => {
+      const value = parseSplitHours(input.value);
+      if (Number.isFinite(value)) {
+        manualSum += value;
+      }
+      if (input._hintElement) {
+        input._hintElement.textContent = Number.isFinite(value) ? formatSplitHint(value) : '';
+      }
+      if (total !== null && Number.isFinite(total)) {
+        input.setAttribute('max', total);
+      } else {
+        input.removeAttribute('max');
+      }
+    });
+    if (splitRemainderInput) {
+      let remainderValue = null;
+      if (total !== null && Number.isFinite(total)) {
+        remainderValue = total - manualSum;
+      }
+      if (Number.isFinite(remainderValue)) {
+        const cleanValue = Math.max(remainderValue, 0);
+        splitRemainderInput.value = toSplitInputValue(cleanValue);
+        splitRemainderInput.classList.toggle('split-input-error', remainderValue <= 0);
+        if (splitRemainderInput._hintElement) {
+          splitRemainderInput._hintElement.textContent = formatSplitHint(cleanValue);
+        }
+      } else {
+        splitRemainderInput.value = '';
+        splitRemainderInput.classList.remove('split-input-error');
+        if (splitRemainderInput._hintElement) {
+          splitRemainderInput._hintElement.textContent = '';
+        }
+      }
+    }
+    refreshSplitPartLabels();
+  }
+
+  function prepareSplitModal(button) {
+    if (!splitModal) return;
+    const totalAttr = button ? parseSplitHours(button.dataset.totalHours) : null;
+    const fallbackAttr = button ? parseSplitHours(button.dataset.hours) : null;
+    let total = totalAttr !== null ? totalAttr : fallbackAttr;
+    let existingParts = [];
+    if (button) {
+      const pid = button.dataset.pid;
+      const phase = button.dataset.phase;
+      if (pid && phase && PROJECT_DATA[pid] && PROJECT_DATA[pid].phases) {
+        const phaseEntry = PROJECT_DATA[pid].phases[phase];
+        if (Array.isArray(phaseEntry)) {
+          existingParts = phaseEntry;
+          const computedTotal = phaseEntry
+            .map(value => parseSplitHours(value))
+            .filter(value => Number.isFinite(value) && value > 0)
+            .reduce((acc, value) => acc + value, 0);
+          if (Number.isFinite(computedTotal) && computedTotal > 0) {
+            total = computedTotal;
+          }
+        }
+      }
+    }
+    if (total !== null && Number.isFinite(total)) {
+      splitModal.dataset.totalHours = total;
+    } else {
+      delete splitModal.dataset.totalHours;
+    }
+    resetSplitParts(existingParts);
+    if (fallbackAttr && Number.isFinite(fallbackAttr)) {
+      const manuals = getSplitManualInputs();
+      if (manuals.length) {
+        const first = manuals[0];
+        const currentValue = parseSplitHours(first.value);
+        if (!(Number.isFinite(currentValue) && Math.abs(currentValue - fallbackAttr) < 1e-6)) {
+          first.value = toSplitInputValue(fallbackAttr);
+        }
+      }
+    }
+    updateSplitModalDisplay();
+    const manuals = getSplitManualInputs();
+    if (manuals.length) {
+      manuals[0].focus();
+    }
+  }
+  function _applyMoveWithoutReload(data, targetWorker) {
+    if (!draggedTaskElement) return false;
+    const moved = draggedTaskElement;
+    const worker = (targetWorker || '').trim();
+    if (!worker) return false;
+
+    if (worker === 'Sin planificar') {
+      const visibleUnplanned = Array.from(document.querySelectorAll('.unplanned-list[data-worker="Sin planificar"]'))
+        .find(el => el.style.display !== 'none');
+      if (!visibleUnplanned) return false;
+      moved.dataset.day = data.date || '';
+      visibleUnplanned.appendChild(moved);
+      return true;
+    }
+
+    const targetRow = Array.from(document.querySelectorAll('tr[data-worker]')).find(r => (r.dataset.worker || '').trim() === worker);
+    if (!targetRow) return false;
+    const targetCell = targetRow.querySelector(`td[data-date="${data.date}"]`);
+    if (!targetCell) return false;
+    moved.dataset.day = data.date || '';
+    targetCell.appendChild(moved);
+    return true;
+  }
+
+  function afterMove(data, originalDate, targetWorker = '') {
+    localStorage.setItem(LAST_KEY, JSON.stringify({pid: data.pid, phase: data.phase, part: data.part, date: data.date}));
+    localStorage.setItem(TALLER_REFRESH_KEY, String(Date.now()));
+    if (data.date !== originalDate) localStorage.setItem(SCROLL_KEY2, data.date);
+    if (_applyMoveWithoutReload(data, targetWorker)) {
+      draggedTaskElement = null;
+      dragInfo = null;
+      return;
+    }
+    location.reload();
+  }
+  const splitCancel = document.getElementById('split-cancel');
+  const filterForm = document.getElementById('filter-form');
+  const PROJECT_FILTER = {{ project_filter|tojson }};
+  const CLIENT_FILTER = '';
+  const FILTER_ACTIVE = {{ filter_active|tojson }};
+  const PLANNER_FILTER_KEY = 'planner-calendar-text-filter';
+
+  if (filterForm) {
+    const textInput = filterForm.querySelector('input[name=\"q\"]');
+    if (textInput) {
+      if (!textInput.value) {
+        const savedFilter = localStorage.getItem(PLANNER_FILTER_KEY) || '';
+        if (savedFilter) {
+          textInput.value = savedFilter;
+          const url = new URL(window.location.href);
+          if (!url.searchParams.get('q')) {
+            url.searchParams.set('q', savedFilter);
+            window.location.replace(url.toString());
+            return;
+          }
+        }
+      }
+      textInput.addEventListener('input', () => {
+        localStorage.setItem(PLANNER_FILTER_KEY, textInput.value || '');
+      });
+      filterForm.addEventListener('submit', () => {
+        localStorage.setItem(PLANNER_FILTER_KEY, textInput.value || '');
+      });
+    }
+  }
+
+  function initUnplannedPhaseFilters() {
+    const wrap = document.getElementById('unplanned-phase-filters');
+    if (!wrap) return;
+    const searchInput = document.getElementById('unplanned-search-input');
+    const FILTER_STATE_KEY = 'unplannedFiltersState:complete';
+    const folders = Array.from(document.querySelectorAll('.unplanned-folder'));
+    const manualTasks = Array.from(document.querySelectorAll('.manual-dropzone .manual-task'));
+    const allTasks = Array.from(document.querySelectorAll('.unplanned-list .task[data-phase], .manual-dropzone .task[data-phase]'));
+    const phaseNames = Array.from(new Set(allTasks
+      .map((el) => (el.dataset.phase || '').split('#')[0].trim())
+      .filter((name) => name))).sort((a,b) => a.localeCompare(b, 'es'));
+    let saved = {};
+    try {
+      saved = JSON.parse(localStorage.getItem(FILTER_STATE_KEY) || '{}') || {};
+    } catch (_) {
+      saved = {};
+    }
+    const selectedFromStorage = new Set(Array.isArray(saved.phases) ? saved.phases : []);
+    const textFromStorage = typeof saved.text === 'string' ? saved.text : '';
+    if (searchInput && !searchInput.value && textFromStorage) {
+      searchInput.value = textFromStorage;
+    }
+    if (!phaseNames.length) return;
+    wrap.innerHTML = phaseNames.map((phase) => `<label><input type=\"checkbox\" value=\"${phase}\"> ${phase}</label>`).join(' ');
+    const inputs = Array.from(wrap.querySelectorAll('input[type=\"checkbox\"]'));
+    inputs.forEach((input) => {
+      if (selectedFromStorage.has(input.value)) {
+        input.checked = true;
+      }
+    });
+    function persist() {
+      const phases = inputs.filter((i) => i.checked).map((i) => i.value);
+      const text = (searchInput && searchInput.value) ? searchInput.value : '';
+      localStorage.setItem(FILTER_STATE_KEY, JSON.stringify({ phases, text }));
+    }
+    function apply() {
+      const selected = inputs.filter((i) => i.checked).map((i) => i.value);
+      const searchText = ((searchInput && searchInput.value) || '').trim().toLowerCase();
+      folders.forEach((folder) => {
+        const folderText = (folder.textContent || '').toLowerCase();
+        const matchesText = !searchText || folderText.includes(searchText);
+        if (!selected.length) {
+          folder.style.display = matchesText ? '' : 'none';
+          return;
+        }
+        const phasesInFolder = new Set(Array.from(folder.querySelectorAll('.task[data-phase]')).map((el) => (el.dataset.phase || '').split('#')[0].trim()));
+        const matches = selected.every((phase) => phasesInFolder.has(phase));
+        folder.style.display = matches && matchesText ? '' : 'none';
+      });
+      manualTasks.forEach((task) => {
+        const taskText = (task.textContent || '').toLowerCase();
+        const matchesTaskText = !searchText || taskText.includes(searchText);
+        task.style.display = matchesTaskText ? '' : 'none';
+      });
+      persist();
+    }
+    inputs.forEach((input) => input.addEventListener('change', apply));
+    if (searchInput) searchInput.addEventListener('input', apply);
+    apply();
+  }
+  initUnplannedPhaseFilters();
+  const projectFilterInput = filterForm ? filterForm.querySelector('input[name="project"]') : null;
+  const projectIdField = filterForm ? filterForm.querySelector('input[name="project_id"]') : null;
+  if (projectFilterInput && projectIdField) {
+    projectFilterInput.addEventListener('input', () => {
+      projectIdField.value = '';
+    });
+  }
+
+  function makeDraggable(el) {
+    let startX, startY, startLeft, startTop;
+    el.addEventListener('mousedown', e => {
+      if (e.target.closest('input, textarea, select, button')) return;
+      const rect = el.getBoundingClientRect();
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = rect.left + window.scrollX;
+      startTop = rect.top + window.scrollY;
+      el.style.position = 'absolute';
+      el.style.margin = '0';
+      el.style.left = startLeft + 'px';
+      el.style.top = startTop + 'px';
+      function onMove(ev) {
+        el.style.left = startLeft + ev.clientX - startX + 'px';
+        el.style.top = startTop + ev.clientY - startY + 'px';
+      }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+  document.querySelectorAll('.modal-content, .conflict-content:not(.add-project-inline-content), .info-popup, .history-content').forEach(makeDraggable);
+
+
+  const calendarNotes = document.querySelectorAll('.calendar-note-input');
+
+  function autosizeCalendarNote(area, targetHeight) {
+    if (!area) return 0;
+    const baseMin = Number(area.dataset.baseMinHeight || 0);
+    area.style.height = 'auto';
+    const measured = typeof targetHeight === 'number' && targetHeight > 0
+      ? targetHeight
+      : Math.max(area.scrollHeight, baseMin);
+    const finalHeight = Math.max(measured, baseMin);
+    area.style.height = `${finalHeight}px`;
+    return finalHeight;
+  }
+
+  calendarNotes.forEach(area => {
+    const computed = window.getComputedStyle(area);
+    const minHeight = parseFloat(computed.minHeight) || parseFloat(computed.height) || area.offsetHeight;
+    if (minHeight > 0) {
+      area.dataset.baseMinHeight = String(Math.round(minHeight));
+    }
+    autosizeCalendarNote(area);
+    area.addEventListener('input', () => {
+      autosizeCalendarNote(area);
+    });
+    area.addEventListener('change', () => {
+      fetch(CALENDAR_NOTE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ date: area.dataset.date, text: area.value })
+      }).catch(err => {
+        console.error('Error guardando la nota del calendario', err);
+      });
+    });
+  });
+
+  const workerNotes = document.querySelectorAll('.worker-note');
+
+  function autosizeWorkerNote(area, targetHeight) {
+    if (!area) return 0;
+    const baseMin = Number(area.dataset.baseMinHeight || 0);
+    area.style.height = 'auto';
+    const measured = typeof targetHeight === 'number' && targetHeight > 0
+      ? targetHeight
+      : Math.max(area.scrollHeight, baseMin);
+    const finalHeight = Math.max(measured, baseMin);
+    area.style.height = `${finalHeight}px`;
+    area.dataset.currentHeight = String(finalHeight);
+    return finalHeight;
+  }
+
+  workerNotes.forEach(area => {
+    const computed = window.getComputedStyle(area);
+    const minHeight = parseFloat(computed.minHeight) || parseFloat(computed.height) || area.offsetHeight;
+    if (minHeight > 0) {
+      area.dataset.baseMinHeight = String(Math.round(minHeight));
+    }
+    const saved = parseInt(area.dataset.savedHeight || '', 10);
+    if (!Number.isNaN(saved) && saved > 0) {
+      autosizeWorkerNote(area, saved);
+    } else {
+      autosizeWorkerNote(area);
+    }
+    area.addEventListener('input', () => {
+      autosizeWorkerNote(area);
+    });
+    area.addEventListener('change', () => {
+      const latestHeight = parseInt(area.dataset.currentHeight || '', 10) || Math.round(area.offsetHeight);
+      fetch(WORKER_NOTE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ worker: area.dataset.worker, text: area.value, height: latestHeight })
+      }).then(r => r.json()).then(data => {
+        const t = area.nextElementSibling;
+        if (t && data.edited) t.textContent = data.edited;
+        if (data.height) {
+          area.dataset.savedHeight = String(data.height);
+          autosizeWorkerNote(area, data.height);
+        }
+      }).catch(err => {
+        console.error('Error guardando la nota del recurso', err);
+      });
+    });
+  });
+  const hoursBtn = document.getElementById('hours-btn');
+  const hoursRow = document.getElementById('hours-row');
+  const thead = document.querySelector('.schedule thead');
+  function toggleHours() {
+    const open = hoursRow.style.display !== 'none';
+    hoursRow.style.display = open ? 'none' : 'table-row';
+    thead.classList.toggle('open', !open);
+  }
+  const optionalPhaseToggle = document.getElementById('optional-phase-toggle');
+  if (hoursBtn) {
+    hoursBtn.addEventListener('click', toggleHours);
+  }
+  if (optionalPhaseToggle) {
+    optionalPhaseToggle.addEventListener('change', () => {
+      const enabled = optionalPhaseToggle.checked;
+      const savedScroll = wrapper ? wrapper.scrollLeft : null;
+      fetch(OPTIONAL_PHASE_TOGGLE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ enabled })
+      }).then(() => {
+        if (savedScroll !== null) {
+          sessionStorage.setItem(SCROLL_KEY, savedScroll);
+        }
+        location.reload();
+      }).catch(err => {
+        console.error('Error actualizando la importación de mecanizados y tratamientos', err);
+      });
+    });
+  }
+  document.querySelectorAll('.hours-form').forEach(f => {
+    f.addEventListener('change', () => {
+      const val = f.querySelector('select').value;
+      sessionStorage.setItem(SCROLL_KEY, wrapper.scrollLeft);
+      fetch(HOURS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ date: f.dataset.date, hours: val })
+      }).then(resp => {
+        if (resp.ok) { location.reload(); } else { alert('Error'); }
+      });
+    });
+  });
+  const wrapper = document.querySelector('.schedule-wrapper');
+  const SCROLL_KEY = 'calendarScroll';
+
+  function restoreScrollPosition() {
+    const savedScroll = sessionStorage.getItem(SCROLL_KEY);
+    if (savedScroll !== null) {
+      wrapper.scrollLeft = parseFloat(savedScroll);
+    } else {
+      const todayCell = document.querySelector('th.today');
+      if (todayCell) todayCell.scrollIntoView({behavior: 'auto', inline: 'center'});
+    }
+  }
+
+  function preserveCalendarPositionForReload() {
+    if (wrapper) {
+      storeCalendarScrollPositionNow();
+    }
+    sessionStorage.removeItem('highlightPid');
+    const url = new URL(location);
+    if (url.searchParams.has('highlight')) {
+      url.searchParams.delete('highlight');
+      history.replaceState(null, '', url);
+    }
+  }
+
+  function reloadKeepingCalendarPosition() {
+    preserveCalendarPositionForReload();
+    location.reload();
+  }
+
+  if (FILTER_ACTIVE) {
+    const matchingTasks = Array.from(document.querySelectorAll('.schedule .task[data-filter-match="true"]'));
+    let earliestTask = null;
+    let earliestDate = null;
+    matchingTasks.forEach(t => {
+      const isArchived = String(t.dataset.archived || '').toLowerCase() === 'true';
+      if (isArchived) return;
+      const phaseBase = (t.dataset.phase || '').split('#')[0].trim().toLowerCase();
+      if (phaseBase === 'vacaciones') return;
+      const value = t.dataset.day;
+      if (!value) return;
+      const dt = new Date(value);
+      if (Number.isNaN(dt.getTime())) return;
+      if (!earliestDate || dt < earliestDate) {
+        earliestDate = dt;
+        earliestTask = t;
+      }
+    });
+    if (earliestTask) {
+      earliestTask.scrollIntoView({behavior: 'auto', inline: 'center'});
+    } else {
+      restoreScrollPosition();
+    }
+  } else {
+    restoreScrollPosition();
+  }
+  let calendarScrollStoreTimer = null;
+  function storeCalendarScrollPositionNow() {
+    if (calendarScrollStoreTimer) {
+      clearTimeout(calendarScrollStoreTimer);
+      calendarScrollStoreTimer = null;
+    }
+    sessionStorage.setItem(SCROLL_KEY, wrapper.scrollLeft);
+  }
+  function storeCalendarScrollPosition() {
+    if (calendarScrollStoreTimer) return;
+    calendarScrollStoreTimer = setTimeout(() => {
+      calendarScrollStoreTimer = null;
+      sessionStorage.setItem(SCROLL_KEY, wrapper.scrollLeft);
+    }, 150);
+  }
+  wrapper.addEventListener('scroll', storeCalendarScrollPosition, { passive: true });
+  const pizarraToggle = document.getElementById('pizarra-toggle');
+  const pizarraLayer = document.getElementById('pizarra-layer');
+  const pizarraCanvas = document.getElementById('pizarra-canvas');
+  const pizarraToolbar = document.getElementById('pizarra-toolbar');
+  const pizarraColor = document.getElementById('pizarra-color');
+  const pizarraSize = document.getElementById('pizarra-size');
+  const pizarraEraser = document.getElementById('pizarra-eraser');
+  const pizarraUndo = document.getElementById('pizarra-undo');
+  const pizarraRedo = document.getElementById('pizarra-redo');
+  const scheduleTable = document.querySelector('.schedule');
+  let pizarraActive = false;
+  let pizarraMode = 'draw';
+  let pizarraStrokes = [];
+  let pizarraRedoStack = [];
+  let pizarraDrawing = false;
+  let pizarraCurrentStroke = null;
+  let pizarraDpr = window.devicePixelRatio || 1;
+  let pizarraAllowedRange = null;
+  let pizarraCanvasOffsetX = 0;
+
+  function updatePizarraButtons() {
+    if (pizarraUndo) pizarraUndo.disabled = pizarraStrokes.length === 0;
+    if (pizarraRedo) pizarraRedo.disabled = pizarraRedoStack.length === 0;
+    if (pizarraEraser) pizarraEraser.classList.toggle('active', pizarraMode === 'erase');
+  }
+
+  function resizePizarra() {
+    if (!pizarraLayer || !pizarraCanvas || !scheduleTable) return;
+    const width = scheduleTable.offsetWidth;
+    const height = scheduleTable.offsetHeight;
+    if (width === 0 || height === 0) return;
+    pizarraDpr = window.devicePixelRatio || 1;
+    pizarraAllowedRange = resolvePizarraAllowedRange();
+    const renderStart = pizarraAllowedRange ? pizarraAllowedRange.minX : 0;
+    const renderEnd = pizarraAllowedRange ? pizarraAllowedRange.maxX : width;
+    const renderWidth = Math.max(renderEnd - renderStart, 0);
+    pizarraCanvasOffsetX = renderStart;
+    pizarraLayer.style.left = `${renderStart}px`;
+    pizarraLayer.style.width = `${renderWidth}px`;
+    pizarraLayer.style.height = `${height}px`;
+    pizarraCanvas.style.width = `${renderWidth}px`;
+    pizarraCanvas.style.height = `${height}px`;
+    pizarraCanvas.width = Math.round(renderWidth * pizarraDpr);
+    pizarraCanvas.height = Math.round(height * pizarraDpr);
+    renderPizarra();
+  }
+
+  function resolvePizarraAllowedRange() {
+    const cells = Array.from(scheduleTable.querySelectorAll('thead .note-cell[data-date]'));
+    if (!cells.length) return null;
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+    const end = new Date(now.getFullYear(), now.getMonth() + 3, now.getDate());
+    const eligible = cells.filter(cell => {
+      const value = cell.dataset.date;
+      if (!value) return false;
+      const cellDate = new Date(value);
+      if (Number.isNaN(cellDate.getTime())) return false;
+      return cellDate >= start && cellDate <= end;
+    });
+    if (!eligible.length) return null;
+    const minX = Math.min(...eligible.map(cell => cell.offsetLeft));
+    const maxX = Math.max(...eligible.map(cell => cell.offsetLeft + cell.offsetWidth));
+    return { minX, maxX };
+  }
+
+  function isPointAllowed(point) {
+    if (!pizarraAllowedRange) return true;
+    return point.x >= pizarraAllowedRange.minX && point.x <= pizarraAllowedRange.maxX;
+  }
+
+  function renderPizarra() {
+    if (!pizarraCanvas) return;
+    const ctx = pizarraCanvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, pizarraCanvas.width, pizarraCanvas.height);
+    ctx.setTransform(pizarraDpr, 0, 0, pizarraDpr, 0, 0);
+    pizarraStrokes.forEach(stroke => {
+      if (!stroke.points.length) return;
+      ctx.save();
+      ctx.globalCompositeOperation = stroke.mode === 'erase' ? 'destination-out' : 'source-over';
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.size;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      stroke.points.forEach((pt, idx) => {
+        const localX = pt.x - pizarraCanvasOffsetX;
+        if (idx === 0) {
+          ctx.moveTo(localX, pt.y);
+        } else {
+          ctx.lineTo(localX, pt.y);
+        }
+      });
+      ctx.stroke();
+      ctx.restore();
+    });
+  }
+
+  function getPizarraPoint(event) {
+    const rect = pizarraCanvas.getBoundingClientRect();
+    return {
+      x: event.clientX - rect.left + pizarraCanvasOffsetX,
+      y: event.clientY - rect.top
+    };
+  }
+
+  function startPizarraDraw(event) {
+    if (!pizarraActive || !pizarraCanvas) return;
+    const point = getPizarraPoint(event);
+    if (!isPointAllowed(point)) return;
+    pizarraDrawing = true;
+    pizarraCanvas.setPointerCapture(event.pointerId);
+    pizarraCurrentStroke = {
+      mode: pizarraMode,
+      color: pizarraColor ? pizarraColor.value : '#000000',
+      size: pizarraSize ? Number(pizarraSize.value) : 4,
+      points: [point]
+    };
+    pizarraRedoStack = [];
+    updatePizarraButtons();
+  }
+
+  function movePizarraDraw(event) {
+    if (!pizarraDrawing || !pizarraCurrentStroke || !pizarraCanvas) return;
+    const point = getPizarraPoint(event);
+    if (!isPointAllowed(point)) {
+      endPizarraDraw(event);
+      return;
+    }
+    const points = pizarraCurrentStroke.points;
+    const prev = points[points.length - 1];
+    points.push(point);
+    const ctx = pizarraCanvas.getContext('2d');
+    if (!ctx) return;
+    ctx.save();
+    ctx.setTransform(pizarraDpr, 0, 0, pizarraDpr, 0, 0);
+    ctx.globalCompositeOperation = pizarraCurrentStroke.mode === 'erase' ? 'destination-out' : 'source-over';
+    ctx.strokeStyle = pizarraCurrentStroke.color;
+    ctx.lineWidth = pizarraCurrentStroke.size;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(prev.x - pizarraCanvasOffsetX, prev.y);
+    ctx.lineTo(point.x - pizarraCanvasOffsetX, point.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function endPizarraDraw(event) {
+    if (!pizarraDrawing) return;
+    pizarraDrawing = false;
+    if (pizarraCurrentStroke) {
+      pizarraStrokes.push(pizarraCurrentStroke);
+    }
+    pizarraCurrentStroke = null;
+    if (pizarraCanvas && event.pointerId !== undefined) {
+      pizarraCanvas.releasePointerCapture(event.pointerId);
+    }
+    renderPizarra();
+    updatePizarraButtons();
+  }
+
+  if (pizarraToggle && pizarraLayer && pizarraCanvas && scheduleTable) {
+    pizarraToggle.addEventListener('click', () => {
+      pizarraActive = !pizarraActive;
+      pizarraLayer.classList.toggle('active', pizarraActive);
+      pizarraLayer.style.display = pizarraActive ? 'block' : 'none';
+      if (pizarraToolbar) pizarraToolbar.hidden = !pizarraActive;
+      pizarraToggle.classList.toggle('active', pizarraActive);
+      if (pizarraActive) {
+        requestAnimationFrame(resizePizarra);
+      }
+    });
+    pizarraCanvas.addEventListener('pointerdown', startPizarraDraw);
+    pizarraCanvas.addEventListener('pointermove', movePizarraDraw);
+    pizarraCanvas.addEventListener('pointerup', endPizarraDraw);
+    pizarraCanvas.addEventListener('pointerleave', endPizarraDraw);
+    pizarraCanvas.addEventListener('pointercancel', endPizarraDraw);
+
+    if (pizarraEraser) {
+      pizarraEraser.addEventListener('click', () => {
+        pizarraMode = pizarraMode === 'erase' ? 'draw' : 'erase';
+        updatePizarraButtons();
+      });
+    }
+    if (pizarraUndo) {
+      pizarraUndo.addEventListener('click', () => {
+        if (!pizarraStrokes.length) return;
+        pizarraRedoStack.push(pizarraStrokes.pop());
+        renderPizarra();
+        updatePizarraButtons();
+      });
+    }
+    if (pizarraRedo) {
+      pizarraRedo.addEventListener('click', () => {
+        if (!pizarraRedoStack.length) return;
+        pizarraStrokes.push(pizarraRedoStack.pop());
+        renderPizarra();
+        updatePizarraButtons();
+      });
+    }
+    resizePizarra();
+    if ('ResizeObserver' in window) {
+      const observer = new ResizeObserver(() => resizePizarra());
+      observer.observe(scheduleTable);
+    } else {
+      window.addEventListener('resize', resizePizarra);
+    }
+    updatePizarraButtons();
+    pizarraLayer.style.display = 'none';
+  }
+  wrapper.addEventListener('wheel', (e) => {
+    if (!e.shiftKey) return;
+    e.preventDefault();
+    wrapper.scrollLeft += e.deltaY;
+  });
+
+  let isDragScrolling = false;
+  let dragStartX = 0;
+  let dragStartScroll = 0;
+  let dragWithRightButton = false;
+  let suppressContextMenu = false;
+  let dragMoved = false;
+  let skipNextDayMenu = false;
+  let skipDayMenuReset = null;
+
+  function stopDragScroll() {
+    if (!isDragScrolling && !suppressContextMenu) return;
+    if (dragWithRightButton && dragMoved) {
+      skipNextDayMenu = true;
+      if (skipDayMenuReset) {
+        clearTimeout(skipDayMenuReset);
+      }
+      skipDayMenuReset = setTimeout(() => {
+        skipNextDayMenu = false;
+        skipDayMenuReset = null;
+      }, 200);
+    }
+    isDragScrolling = false;
+    if (suppressContextMenu) {
+      setTimeout(() => { suppressContextMenu = false; }, 0);
+    }
+    dragWithRightButton = false;
+    dragMoved = false;
+    wrapper.classList.remove('dragging');
+  }
+
+  wrapper.addEventListener('mousedown', (e) => {
+    const wantsShiftDrag = e.button === 0 && e.shiftKey;
+    const wantsRightDrag = e.button === 2;
+    if (!wantsShiftDrag && !wantsRightDrag) return;
+    dragStartX = e.clientX;
+    dragStartScroll = wrapper.scrollLeft;
+    isDragScrolling = true;
+    dragWithRightButton = wantsRightDrag;
+    suppressContextMenu = wantsRightDrag;
+    dragMoved = false;
+    if (wantsRightDrag && skipDayMenuReset) {
+      clearTimeout(skipDayMenuReset);
+      skipDayMenuReset = null;
+      skipNextDayMenu = false;
+    }
+    wrapper.classList.add('dragging');
+    e.preventDefault();
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!isDragScrolling) return;
+    const requiredButton = dragWithRightButton ? 2 : 1;
+    if ((e.buttons & requiredButton) === 0) {
+      stopDragScroll();
+      return;
+    }
+    const delta = e.clientX - dragStartX;
+    if (!dragMoved && Math.abs(delta) > 2) {
+      dragMoved = true;
+    }
+    wrapper.scrollLeft = dragStartScroll - delta;
+  });
+
+  window.addEventListener('mouseup', (e) => {
+    if (!isDragScrolling) return;
+    if (e.button !== 0 && e.button !== 2) return;
+    stopDragScroll();
+  });
+
+  window.addEventListener('blur', stopDragScroll);
+
+  wrapper.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if (suppressContextMenu || isDragScrolling) {
+      return;
+    }
+  });
+  const todayBtn = document.getElementById('today-btn');
+  if (todayBtn) {
+    todayBtn.addEventListener('click', () => {
+      const todayCell = document.querySelector('th.today');
+      if (todayCell) todayCell.scrollIntoView({behavior: 'smooth', inline: 'center'});
+    });
+  }
+
+  const sortDueBtn = document.getElementById('sort-due-btn');
+  const sortStatusBtn = document.getElementById('sort-status-btn');
+  const sortPhaseBtn = document.getElementById('sort-phase-btn');
+  const orderLists = document.querySelectorAll('.unplanned-list[data-mode]');
+  const ORDER_KEY = 'unplannedOrderMode';
+  const ORDER_STATUS = 'status';
+  const ORDER_DUE = 'due';
+  const ORDER_PHASE = 'phase';
+
+  function applyUnplannedOrder(mode) {
+    const selected = mode === ORDER_DUE ? ORDER_DUE : (mode === ORDER_PHASE ? ORDER_PHASE : ORDER_STATUS);
+    orderLists.forEach((list) => {
+      const active = list.dataset.mode === selected;
+      list.style.display = active ? 'block' : 'none';
+      list.classList.toggle('active', active);
+    });
+    if (sortDueBtn) sortDueBtn.classList.toggle('active', selected === ORDER_DUE);
+    if (sortStatusBtn) sortStatusBtn.classList.toggle('active', selected === ORDER_STATUS);
+    if (sortPhaseBtn) sortPhaseBtn.classList.toggle('active', selected === ORDER_PHASE);
+    localStorage.setItem(ORDER_KEY, selected);
+  }
+
+  const savedOrder = localStorage.getItem(ORDER_KEY);
+  const initialOrder = [ORDER_DUE, ORDER_STATUS, ORDER_PHASE].includes(savedOrder) ? savedOrder : ORDER_STATUS;
+  if (sortDueBtn) {
+    sortDueBtn.addEventListener('click', () => applyUnplannedOrder(ORDER_DUE));
+  }
+  if (sortStatusBtn) {
+    sortStatusBtn.addEventListener('click', () => applyUnplannedOrder(ORDER_STATUS));
+  }
+  if (sortPhaseBtn) {
+    sortPhaseBtn.addEventListener('click', () => applyUnplannedOrder(ORDER_PHASE));
+  }
+  if (orderLists.length) {
+    applyUnplannedOrder(initialOrder);
+  }
+const tasks = document.querySelectorAll('.task');
+
+  let selectedPhaseIndicatorTask = null;
+
+  function clearOffscreenPhaseIndicators() {
+    document.querySelectorAll('.phase-offscreen-arrow').forEach(el => el.remove());
+  }
+
+  function taskMatchesSelectedPhase(candidate, selectedTask) {
+    if (!candidate || !selectedTask || candidate === selectedTask) return false;
+    if (candidate.classList.contains('deactivated')) return false;
+    if (!candidate.closest('.schedule')) return false;
+    return candidate.dataset.pid === selectedTask.dataset.pid
+      && candidate.dataset.phase === selectedTask.dataset.phase
+      && normalizePartValue(candidate.dataset.part) === normalizePartValue(selectedTask.dataset.part);
+  }
+
+  function nearestOffscreenPhaseTargets(selectedTask) {
+    const targets = { left: null, right: null };
+    if (!wrapper || !selectedTask) return targets;
+    const wrapperRect = wrapper.getBoundingClientRect();
+    document.querySelectorAll('.schedule .task[data-pid][data-phase]').forEach(candidate => {
+      if (!taskMatchesSelectedPhase(candidate, selectedTask)) return;
+      const rect = candidate.getBoundingClientRect();
+      if (rect.right < wrapperRect.left) {
+        const distance = wrapperRect.left - rect.right;
+        if (!targets.left || distance < targets.left.distance) {
+          targets.left = { element: candidate, distance };
+        }
+      } else if (rect.left > wrapperRect.right) {
+        const distance = rect.left - wrapperRect.right;
+        if (!targets.right || distance < targets.right.distance) {
+          targets.right = { element: candidate, distance };
+        }
+      }
+    });
+    return targets;
+  }
+
+  function scrollToOffscreenPhaseTarget(target) {
+    if (!target || !target.element || !wrapper) return;
+    const rect = target.element.getBoundingClientRect();
+    const wrapperRect = wrapper.getBoundingClientRect();
+    wrapper.scrollLeft += rect.left - wrapperRect.left - (wrapper.clientWidth / 2) + (rect.width / 2);
+    target.element.classList.add('highlight');
+    target.element.classList.remove('dim');
+    renderOffscreenPhaseIndicators(target.element);
+  }
+
+  function appendOffscreenPhaseArrow(direction, target, rowRect, wrapperRect) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `phase-offscreen-arrow phase-offscreen-arrow--${direction}`;
+    btn.textContent = direction === 'left' ? '◀' : '▶';
+    btn.title = direction === 'left'
+      ? 'Esta fase tiene horas fuera de la vista hacia la izquierda'
+      : 'Esta fase tiene horas fuera de la vista hacia la derecha';
+    btn.style.top = `${Math.max(wrapperRect.top + 4, rowRect.top + 4)}px`;
+    btn.style.left = direction === 'left'
+      ? `${wrapperRect.left + 8}px`
+      : `${wrapperRect.right - 44}px`;
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      scrollToOffscreenPhaseTarget(target);
+    });
+    document.body.appendChild(btn);
+  }
+
+  function renderOffscreenPhaseIndicators(selectedTask) {
+    clearOffscreenPhaseIndicators();
+    selectedPhaseIndicatorTask = selectedTask || null;
+    if (!wrapper || !selectedTask || !selectedTask.closest('.schedule')) return;
+    const row = selectedTask.closest('tr');
+    const rowRect = row ? row.getBoundingClientRect() : selectedTask.getBoundingClientRect();
+    const wrapperRect = wrapper.getBoundingClientRect();
+    if (rowRect.bottom < wrapperRect.top || rowRect.top > window.innerHeight) return;
+    const targets = nearestOffscreenPhaseTargets(selectedTask);
+    if (targets.left) appendOffscreenPhaseArrow('left', targets.left, rowRect, wrapperRect);
+    if (targets.right) appendOffscreenPhaseArrow('right', targets.right, rowRect, wrapperRect);
+  }
+
+  let offscreenIndicatorFrame = null;
+  function scheduleOffscreenPhaseIndicators() {
+    if (!selectedPhaseIndicatorTask || offscreenIndicatorFrame) return;
+    offscreenIndicatorFrame = requestAnimationFrame(() => {
+      offscreenIndicatorFrame = null;
+      if (selectedPhaseIndicatorTask) renderOffscreenPhaseIndicators(selectedPhaseIndicatorTask);
+    });
+  }
+  wrapper.addEventListener('scroll', scheduleOffscreenPhaseIndicators, { passive: true });
+  window.addEventListener('resize', scheduleOffscreenPhaseIndicators);
+  window.addEventListener('scroll', scheduleOffscreenPhaseIndicators, { passive: true });
+
+const folders = document.querySelectorAll('.unplanned-folder');
+const popup = document.getElementById('info-popup');
+const projectRows = document.querySelectorAll('.projects-table tbody tr[data-pid]');
+function setProjectTablePhaseColumnVisibility(row) {
+  const table = row ? row.closest('.projects-table') : null;
+  if (!table) return;
+  const visiblePhaseColumns = new Set();
+  table.querySelectorAll('thead th[data-project-phase-column]').forEach((header) => {
+    const cell = row.cells[header.cellIndex];
+    const total = Number(cell ? (cell.dataset.phaseTotal || cell.dataset.sort || '0') : '0');
+    if (Number.isFinite(total) && total > 0) {
+      visiblePhaseColumns.add(header.cellIndex);
+    }
+  });
+  table.querySelectorAll('tr').forEach((tableRow) => {
+    Array.from(tableRow.children).forEach((cell, index) => {
+      const isPhaseColumn = cell.matches('[data-project-phase-column], .project-phase-cell');
+      if (!isPhaseColumn) return;
+      cell.style.display = visiblePhaseColumns.has(index) ? '' : 'none';
+    });
+  });
+}
+function resetProjectTablePhaseColumns() {
+  document.querySelectorAll('.projects-table [data-project-phase-column], .projects-table .project-phase-cell').forEach((cell) => {
+    cell.style.display = '';
+  });
+}
+function showOnlyProjectTableRow(pid) {
+  let selectedRow = null;
+  projectRows.forEach(row => {
+    if (row.dataset.pid === pid) {
+      selectedRow = row;
+      row.classList.remove('proj-hidden-by-task', 'proj-dim');
+      row.classList.add('proj-highlight');
+    } else {
+      row.classList.add('proj-hidden-by-task');
+      row.classList.remove('proj-highlight', 'proj-dim');
+    }
+  });
+  if (selectedRow) {
+    setProjectTablePhaseColumnVisibility(selectedRow);
+  }
+}
+function resetProjectTableRows() {
+  resetProjectTablePhaseColumns();
+  projectRows.forEach(row => {
+    row.classList.remove('proj-hidden-by-task', 'proj-highlight', 'proj-dim');
+  });
+}
+const WORKER_ROW_STATE_KEY = 'calendarCollapsedWorkers';
+let lastDrag = null;
+let dragInfo = null;
+let draggedTaskElement = null;
+
+  function normalizePartToken(value) {
+    const n = normalizePartValue(value);
+    return n || '';
+  }
+
+  function matchesTaskIdentity(taskEl, pid, phase, partToken) {
+    return (taskEl.dataset.pid || '') === String(pid || '')
+      && (taskEl.dataset.phase || '') === String(phase || '')
+      && normalizePartToken(taskEl.dataset.part) === (partToken || '');
+  }
+
+  function refreshUrgentCellHighlights() {
+    document.querySelectorAll('tbody td[data-date]').forEach(cell => {
+      const hasUrgent = Array.from(cell.querySelectorAll('.task[data-pid]')).some(taskEl => {
+        const info = resolveProjectEntry(taskEl.dataset.pid);
+        return Boolean(info && info.urgent);
+      });
+      cell.classList.toggle('urgent-cell', hasUrgent);
+    });
+  }
+
+  let collapsedWorkers = {};
+  try {
+    collapsedWorkers = JSON.parse(localStorage.getItem(WORKER_ROW_STATE_KEY) || '{}') || {};
+  } catch (_) {
+    collapsedWorkers = {};
+  }
+
+  document.querySelectorAll('tr[data-worker] .worker-label').forEach(label => {
+    const row = label.closest('tr[data-worker]');
+    if (!row) return;
+    const worker = row.dataset.worker || '';
+    if (collapsedWorkers[worker]) {
+      row.classList.add('collapsed');
+    }
+    label.addEventListener('click', ev => {
+      ev.stopPropagation();
+      row.classList.toggle('collapsed');
+      collapsedWorkers[worker] = row.classList.contains('collapsed');
+      try {
+        localStorage.setItem(WORKER_ROW_STATE_KEY, JSON.stringify(collapsedWorkers));
+      } catch (_) {
+        // Ignore storage errors (private mode / quotas)
+      }
+    });
+  });
+
+  tasks.forEach(t => {
+    t.addEventListener('dragstart', e => {
+      if (t.classList.contains('deactivated')) {
+        e.preventDefault();
+        return;
+      }
+      if (t.dataset.archived === 'true') {
+        e.preventDefault();
+        return;
+      }
+      popup.style.display = 'none';
+      const row = t.closest('[data-worker]');
+      const partValue = normalizePartValue(t.dataset.part);
+      const manualSource = !!t.closest('#manual-dropzone');
+      lastDrag = {
+        pid: t.dataset.pid,
+        phase: t.dataset.phase,
+        date: t.dataset.day,
+        worker: row ? row.dataset.worker : '',
+        part: partValue
+      };
+      dragInfo = { pid: t.dataset.pid, phase: t.dataset.phase, part: partValue, manual: manualSource };
+      draggedTaskElement = t;
+      e.dataTransfer.setData('text/plain', JSON.stringify({pid: t.dataset.pid, phase: t.dataset.phase, part: partValue}));
+    });
+    t.addEventListener('dragend', () => { dragInfo = null; draggedTaskElement = null; });
+    t.addEventListener('click', (e) => {
+      if (t.classList.contains('deactivated')) return;
+      e.stopPropagation();
+      const proj = t.dataset.project;
+      tasks.forEach(o => {
+        if (o.dataset.project === proj) {
+          o.classList.add('highlight');
+          o.classList.remove('dim');
+        } else {
+          o.classList.add('dim');
+          o.classList.remove('highlight');
+        }
+      });
+      folders.forEach(f => {
+        if (f.dataset.pid === t.dataset.pid) {
+          f.classList.remove('dim');
+        } else {
+          f.classList.add('dim');
+        }
+      });
+      showOnlyProjectTableRow(t.dataset.pid);
+      renderOffscreenPhaseIndicators(t);
+      const infoRaw = resolveProjectEntry(t.dataset.pid);
+      const info = (infoRaw && typeof infoRaw === 'object') ? infoRaw : {};
+      const isArchivedShadow = t.dataset.archived === 'true' || !!info.archived_shadow;
+      const normalizedPart = normalizePartValue(t.dataset.part);
+      const phasePartSuffix = formatPartSuffix(t.dataset.part);
+      const displayName = info.name || t.dataset.project;
+      const displayClient = info.client || t.dataset.client;
+      const blockedBadge = info.blocked ? ' <span class="blocked-sign">\u{1F6AB}</span>' : '';
+      let html = `<div class="popup-section popup-header"><strong>${displayName}${blockedBadge} - ${displayClient} - ${t.dataset.phase}${phasePartSuffix}</strong></div>`;
+      const startMap = resolveStartMap(t.dataset.pid);
+      const startVal = startMap[t.dataset.phase] || '';
+      const metaLines = [];
+      const status = (info.material_status || '').toString();
+      if (status === 'missing') {
+        const missingTitles = Array.isArray(info.material_missing_titles)
+          ? info.material_missing_titles.filter(title => title && `${title}`.trim() !== '')
+          : [];
+        if (missingTitles.length) {
+          const items = missingTitles
+            .map(title => `<li>${escapeHtml(title)}</li>`)
+            .join('');
+          metaLines.push(`<div class="material-status-missing-block"><strong class="material-status-flag material-status-missing">FALTA MATERIAL</strong><ul class="material-status-missing-list">${items}</ul></div>`);
+        } else {
+          metaLines.push('<div><strong class="material-status-flag material-status-missing">FALTA MATERIAL</strong></div>');
+        }
+      } else if (status === 'pending') {
+        metaLines.push('<div><strong class="material-status-flag material-status-pending">MATERIAL POR PEDIR</strong></div>');
+      } else if (status === 'verify') {
+        metaLines.push('<div><strong class="material-status-flag material-status-verify">SOLO FALTA VERIFICAR MATERIAL</strong></div>');
+      } else if (status === 'archived' || isArchivedShadow) {
+        metaLines.push('<div><strong class="material-status-flag material-status-archived">MATERIAL ARCHIVADO</strong></div>');
+      } else if (status) {
+        metaLines.push('<div><strong class="material-status-flag material-status-complete">MATERIAL COMPLETO</strong></div>');
+      }
+      if (info.due_date && info.due_date !== '0') metaLines.push(`<div>Límite: ${info.due_date}</div>`);
+      const kanbanClientDate = (info.kanban_display_fields || {})['Fecha cliente']
+        || (info.kanban_display_fields || {})['Fecha Cliente'];
+      if (kanbanClientDate) metaLines.push(`<div>Fecha cliente: ${kanbanClientDate}</div>`);
+      if (info.material_confirmed_date && info.material_confirmed_date !== '0') metaLines.push(`<div>Material confirmado: ${info.material_confirmed_date}</div>`);
+      if (!metaLines.length && isArchivedShadow) {
+        metaLines.push('<div><strong class="material-status-flag material-status-archived">MATERIAL ARCHIVADO</strong></div>');
+      }
+      if (metaLines.length) html += `<div class="popup-section">${metaLines.join('')}</div>`;
+      const kanbanFields = info.kanban_display_fields || {};
+      const kanbanHourLabelSet = new Set([
+        'horas montaje',
+        'horas soldadura',
+        'horas montaje 2º',
+        'horas soldadura 2º',
+        'horas preparacion',
+        'horas acabado',
+      ]);
+      const normalizeKanbanFieldLabel = (label) => (label || '')
+        .toString()
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+      const orderedKanbanFieldLabels = ['lanzamiento', 'material', 'caldereria', 'tratamiento', 'mecanizado', 'pintado'];
+      const kanbanFieldOrder = new Map(orderedKanbanFieldLabels.map((label, index) => [label, index]));
+      const kanbanEntries = Object.entries(kanbanFields)
+        .map(([label, value], originalIndex) => [label, value, originalIndex])
+        .filter(([label, value]) => {
+          const normalizedLabel = normalizeKanbanFieldLabel(label);
+          return normalizedLabel !== 'fecha cliente'
+            && !kanbanHourLabelSet.has(normalizedLabel)
+            && value !== null
+            && value !== undefined
+            && `${value}`.trim() !== '';
+        })
+        .sort(([labelA, _valueA, indexA], [labelB, _valueB, indexB]) => {
+          const normalizedA = normalizeKanbanFieldLabel(labelA);
+          const normalizedB = normalizeKanbanFieldLabel(labelB);
+          const orderA = kanbanFieldOrder.has(normalizedA) ? kanbanFieldOrder.get(normalizedA) : Number.MAX_SAFE_INTEGER;
+          const orderB = kanbanFieldOrder.has(normalizedB) ? kanbanFieldOrder.get(normalizedB) : Number.MAX_SAFE_INTEGER;
+          if (orderA !== orderB) return orderA - orderB;
+          return indexA - indexB;
+        });
+      if (kanbanEntries.length) {
+        let kanbanHtml = '<div class="popup-section kanban-extra-fields">';
+        kanbanEntries.forEach(([label, value]) => {
+          const displayValue = `${value}`;
+          kanbanHtml += `<div>${label}: ${displayValue}</div>`;
+        });
+        kanbanHtml += '</div>';
+        html += kanbanHtml;
+      }
+      const kanbanHourLabels = ['Horas Montaje', 'Horas Soldadura', 'Horas Montaje 2º', 'Horas Soldadura 2º', 'Horas Preparación', 'Horas Acabado'];
+      const kanbanHourEntries = kanbanHourLabels
+        .map((label) => [label, (kanbanFields || {})[label]])
+        .filter(([_, value]) => {
+          const parsed = Number.parseFloat(`${value ?? ''}`.replace(',', '.'));
+          return Number.isFinite(parsed) && parsed !== 0;
+        });
+      if (kanbanHourEntries.length) {
+        const lines = kanbanHourEntries
+          .map(([label, value]) => `<div>${label}: ${value}h</div>`)
+          .join('');
+        html += `<div class="popup-section"><strong>Horas Kanbanize</strong>${lines}</div>`;
+      }
+      html += renderProjectOrdersSection(t.dataset.pid);
+      const projectPhases = info.phases || {};
+      const assignedMap = info.assigned || {};
+      const basePhaseSet = new Set(PHASES);
+      const visiblePhaseKeys = new Set();
+      document.querySelectorAll('.task[data-pid]').forEach((node) => {
+        if ((node.dataset.pid || '') !== (t.dataset.pid || '')) return;
+        const key = (node.dataset.phase || '').trim();
+        if (key) visiblePhaseKeys.add(key);
+      });
+      visiblePhaseKeys.add((t.dataset.phase || '').trim());
+      Object.entries(assignedMap).forEach(([phaseKey, assigned]) => {
+        if (assigned && assigned !== 'Sin planificar') {
+          visiblePhaseKeys.add((phaseKey || '').trim());
+        }
+      });
+
+      const extractTaskHours = (el) => {
+        if (!el) return null;
+        const dsHours = el.dataset.hours;
+        if (dsHours !== undefined && dsHours !== null && `${dsHours}`.trim() !== '') {
+          const parsed = Number(dsHours);
+          if (Number.isFinite(parsed)) return parsed;
+        }
+        const hoursNode = el.querySelector('.task-hours');
+        if (hoursNode) {
+          const match = hoursNode.textContent.match(/([0-9]+(?:[.,][0-9]+)?)/);
+          if (match) {
+            const parsed = Number(match[1].replace(',', '.'));
+            if (Number.isFinite(parsed)) return parsed;
+          }
+        }
+        return null;
+      };
+
+      const resolvePhaseHours = (phaseKey, isActivePhase = false) => {
+        const val = projectPhases[phaseKey];
+        if (Array.isArray(val)) {
+          const parsedParts = val
+            .map((v) => Number.parseInt(v, 10))
+            .filter((n) => Number.isFinite(n));
+          if (isActivePhase && normalizedPart !== '' && Number.isInteger(Number(normalizedPart))) {
+            const idx = Number(normalizedPart);
+            if (idx >= 0 && idx < parsedParts.length) {
+              return parsedParts[idx] || 0;
+            }
+          }
+          return parsedParts.reduce((a, b) => a + b, 0);
+        }
+        const parsed = Number.parseInt(val, 10);
+        if (Number.isFinite(parsed)) return parsed;
+        const fallback = extractTaskHours(t);
+        return Number.isFinite(fallback) ? fallback : 0;
+      };
+
+      const phaseLines = [];
+      PHASES.forEach(ph => {
+        if (ph === 'dibujo' || ph === 'pedidos') return;
+        if (!visiblePhaseKeys.has(ph)) return;
+        const isActivePhase = ph === t.dataset.phase;
+        const total = resolvePhaseHours(ph, isActivePhase);
+        if (total > 0) {
+          const assigned = assignedMap[ph] || 'Sin planificar';
+          const classes = ['phase-entry'];
+          classes.push(assigned === 'Sin planificar' ? 'unplanned' : 'planned');
+          const partSuffix = isActivePhase ? phasePartSuffix : '';
+          let line = `<div class="${classes.join(' ')}">${ph}${partSuffix}: ${total}h`;
+          if (isActivePhase) {
+            const partValue = normalizedPart;
+            const partAttr = partValue ? ` data-part="${partValue}"` : '';
+            line += ` <form id="phase-hours-form" style="display:inline"><input type="number" id="phase-hours-input" value="${total}" min="1" required><button type="submit" id="phase-hours-btn" data-pid="${t.dataset.pid}" data-phase="${ph}"${partAttr}>Cambiar horas</button></form>`;
+          }
+          line += `</div>`;
+          phaseLines.push(line);
+        }
+      });
+      const manualPhaseLines = [];
+      Object.entries(projectPhases).forEach(([phKey, val]) => {
+        if (phKey === 'dibujo' || phKey === 'pedidos') return;
+        const baseName = phKey.split('#')[0];
+        const isBasePhase = basePhaseSet.has(phKey) || (!phKey.includes('#') && basePhaseSet.has(baseName));
+        if (isBasePhase) return;
+        if (!visiblePhaseKeys.has(phKey)) return;
+        const isActivePhase = phKey === t.dataset.phase;
+        const total = resolvePhaseHours(phKey, isActivePhase);
+        if (total > 0) {
+          const assigned = assignedMap[phKey] || 'Sin planificar';
+          const classes = ['phase-entry', 'manual-phase-entry'];
+          classes.push(assigned === 'Sin planificar' ? 'unplanned' : 'planned');
+          const partSuffix = isActivePhase ? phasePartSuffix : '';
+          let line = `<div class="${classes.join(' ')}">${phKey}${partSuffix}: ${total}h`;
+          if (isActivePhase) {
+            const partValue = normalizedPart;
+            const partAttr = partValue ? ` data-part="${partValue}"` : '';
+            line += ` <form id="phase-hours-form" style="display:inline"><input type="number" id="phase-hours-input" value="${total}" min="1" required><button type="submit" id="phase-hours-btn" data-pid="${t.dataset.pid}" data-phase="${phKey}"${partAttr}>Cambiar horas</button></form>`;
+          }
+          line += `</div>`;
+          manualPhaseLines.push(line);
+        }
+      });
+      let phaseSection = '';
+      if (phaseLines.length) phaseSection += phaseLines.join('');
+      if (manualPhaseLines.length) phaseSection += manualPhaseLines.join('');
+      if (t.dataset.phase === 'pedidos') {
+        const acopio = projectPhases['pedidos'];
+        if (acopio && acopio !== '0') phaseSection += `<div>Plazo acopio: ${acopio}</div>`;
+      }
+      if (phaseSection) html += `<div class="popup-section">${phaseSection}</div>`;
+      const actionLines = [];
+      const leftActionLines = [];
+      const rightActionLines = [];
+      const bottomActionLines = [];
+      const safeProjectAttr = escapeHtml(info.name || t.dataset.project || '');
+      const safePidAttr = escapeHtml(t.dataset.pid || '');
+      const historyPartAttr = normalizedPart ? ` data-part="${normalizedPart}"` : '';
+      rightActionLines.push(`<div><button type="button" class="history-btn popup-action-btn" data-pid="${t.dataset.pid}" data-phase="${t.dataset.phase}"${historyPartAttr}>Historial</button></div>`);
+      if (!isArchivedShadow) {
+        leftActionLines.push(`<div><button id="freeze-btn" class="popup-action-btn" data-pid="${t.dataset.pid}" data-phase="${t.dataset.phase}" style="color:red;font-weight:bold">${(info.frozen_phases && info.frozen_phases.includes(t.dataset.phase)) ? 'Descongelar' : 'Congelar'}</button></div>`);
+        const urgentActive = Boolean(info && info.urgent);
+        leftActionLines.push(`<div><button type="button" id="urgent-btn" class="popup-action-btn" data-pid="${t.dataset.pid}" style="font-weight:bold;color:${urgentActive ? '#fff' : '#a00'};background:${urgentActive ? '#a00' : '#fff'}">URGENTE</button></div>`);
+        const launchEntries = Array.isArray(info && info.launched_phases) ? info.launched_phases : [];
+        const launchedActive = launchEntries.some(entry => {
+          if (!entry || entry.phase !== t.dataset.phase) return false;
+          const entryPart = normalizePartValue(entry.part);
+          return entryPart === normalizedPart;
+        });
+        if ((t.dataset.phase || '').split('#')[0] === 'lanzamiento') {
+          rightActionLines.push(`<div><label class="popup-launch-toggle popup-action-btn"><input type="checkbox" id="launched-toggle" data-pid="${t.dataset.pid}" data-phase="${t.dataset.phase}"${historyPartAttr} ${launchedActive ? 'checked' : ''}>Lanzado</label></div>`);
+        }
+        rightActionLines.push(`<div><button type="button" class="view-pedidos-btn popup-action-btn" data-project="${safeProjectAttr}" data-pid="${safePidAttr}">Ver pedidos</button></div>`);
+        let totalPhaseHours = resolvePhaseHours(t.dataset.phase, true);
+        if (!Number.isFinite(totalPhaseHours) || totalPhaseHours <= 0) {
+          const parsedDataset = Number(t.dataset.hours);
+          totalPhaseHours = Number.isFinite(parsedDataset) ? parsedDataset : null;
+        }
+        const totalHoursAttr = totalPhaseHours !== null ? ` data-total-hours="${totalPhaseHours}"` : '';
+        const partHoursAttr = t.dataset.hours ? ` data-hours="${t.dataset.hours}"` : '';
+        const basePhaseName = (t.dataset.phase || '').split('#')[0];
+        leftActionLines.push(`<div><button type="button" class="create-phase-btn popup-action-btn" data-pid="${t.dataset.pid}">Crear fase</button></div>`);
+        leftActionLines.push(`<div><button class="add-phase-instance-btn popup-action-btn" data-pid="${t.dataset.pid}" data-phase="${t.dataset.phase}">Añadir fase de ${basePhaseName}</button></div>`);
+        if (Array.isArray(projectPhases[t.dataset.phase])) {
+          const splitLine = `<div><button id="unsplit-btn" class="popup-action-btn" data-pid="${t.dataset.pid}" data-phase="${t.dataset.phase}">Deshacer división</button></div>`;
+          leftActionLines.push(splitLine);
+        }
+        const unplanPart = normalizedPart;
+        const unplanAttr = unplanPart ? ` data-part="${unplanPart}"` : '';
+        rightActionLines.push(`<div><button id="unplan-btn" class="popup-action-btn" data-pid="${t.dataset.pid}" data-phase="${t.dataset.phase}"${unplanAttr}>Sin planificar</button></div>`);
+        const showInTransportes = Boolean(info && (info.transport_visible || info.show_in_transportes));
+        rightActionLines.push(`<div><label class="popup-transport-toggle popup-action-btn"><input type="checkbox" id="transport-visible-toggle" data-pid="${t.dataset.pid}" ${showInTransportes ? 'checked' : ''}>Ver en Transportes</label></div>`);
+        const obsValue = info && info.observations !== undefined && info.observations !== null
+          ? `${info.observations}`
+          : '';
+        const safeObsValue = escapeHtml(obsValue);
+        actionLines.push(`
+          <div class="popup-observations">
+            <label for="obs-text">Observaciones</label>
+            <textarea id="obs-text" data-pid="${t.dataset.pid}" class="popup-observations-text">${safeObsValue}</textarea>
+            <div class="popup-observations-actions">
+              <button type="button" id="obs-save" data-pid="${t.dataset.pid}">Guardar</button>
+            </div>
+          </div>
+        `);
+        bottomActionLines.push(`<div class="popup-bottom-action"><button class="phase-delete-btn popup-action-btn" id="del-btn" data-pid="${t.dataset.pid}" data-phase="${t.dataset.phase}">&#10060; Borrar fase</button></div>`);
+      } else {
+        const kanbanColumn = ((info && info.kanban_column) || '').toString().trim().toLowerCase();
+        if (kanbanColumn === 'ready to archive') {
+          const archivePartAttr = normalizedPart ? ` data-part="${normalizedPart}"` : '';
+          actionLines.push(`<div><button type="button" class="remove-archived-phase-btn" data-pid="${t.dataset.pid}" data-phase="${t.dataset.phase}"${archivePartAttr}>Eliminar fase archivada</button></div>`);
+        }
+        if (info && info.observations) {
+          const safeObsValue = escapeHtml(`${info.observations}`);
+          actionLines.push(`<div class="popup-section"><strong>Observaciones</strong><div>${safeObsValue}</div></div>`);
+        }
+        actionLines.push('<div class="popup-section popup-readonly">Proyecto archivado en Kanbanize. Acciones limitadas.</div>');
+        const showInTransportesArchived = Boolean(info && (info.transport_visible || info.show_in_transportes));
+        rightActionLines.push(`<div><label class="popup-transport-toggle popup-action-btn"><input type="checkbox" id="transport-visible-toggle" data-pid="${t.dataset.pid}" ${showInTransportesArchived ? 'checked' : ''}>Ver en Transportes</label></div>`);
+      }
+      if (info.image) {
+          const imgUrl = `${STATIC_URL}${info.image}`;
+          actionLines.push(`<div><a href="${imgUrl}" target="_blank"><img src="${imgUrl}" style="max-width:200px;display:block;margin-top:4px;"></a></div>`);
+        }
+        if (info.kanban_attachments && info.kanban_attachments.length) {
+          info.kanban_attachments.forEach(att => {
+            let url = att.url;
+            if (url && url.includes('kanbanize.com')) {
+              url = `${KANBAN_ATTACHMENT_PROXY_URL}?url=${encodeURIComponent(url)}`;
+            }
+            const name = (att.name || '').toLowerCase();
+            if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(name)) {
+              actionLines.push(`<div><a href="${url}" target="_blank"><img src="${url}" alt="${att.name || ''}" style="max-width:200px;display:block;margin-top:4px;"></a></div>`);
+            } else {
+              actionLines.push(`<div><a href="${url}" target="_blank">${att.name || url}</a></div>`);
+            }
+          });
+        }
+      const actionColumns = `<div class="popup-actions-grid"><div class="popup-actions-col">${leftActionLines.join('')}</div><div class="popup-actions-col">${rightActionLines.join('')}</div></div>`;
+      html += `<div class="popup-section">${actionColumns}${actionLines.join('')}${bottomActionLines.join('')}</div>`;
+      popup.innerHTML = html;
+      const rect = t.getBoundingClientRect();
+      popup.style.left = (rect.left + window.scrollX + 5) + 'px';
+      popup.style.top = (rect.bottom + window.scrollY + 5) + 'px';
+      popup.style.display = 'block';
+      const historyBtn = popup.querySelector('.history-btn');
+      const viewPedidosBtn = popup.querySelector('.view-pedidos-btn');
+      if (historyBtn) {
+        historyBtn.addEventListener('click', ev => {
+          ev.stopPropagation();
+          const partValue = normalizePartValue(historyBtn.dataset.part);
+          openHistory(historyBtn.dataset.pid, historyBtn.dataset.phase, partValue, displayName, displayClient);
+        });
+      }
+      if (viewPedidosBtn) {
+        viewPedidosBtn.addEventListener('click', ev => {
+          ev.stopPropagation();
+          try {
+            const url = new URL(CALENDAR_PEDIDOS_URL, window.location.origin);
+            const projectName = viewPedidosBtn.dataset.project || '';
+            if (projectName) url.searchParams.set('filter', projectName);
+            const pidValue = viewPedidosBtn.dataset.pid || '';
+            if (pidValue) url.searchParams.set('highlight', pidValue);
+            window.open(url.toString(), '_blank');
+          } catch (error) {
+            console.error('No se pudo abrir Calendario pedidos:', error);
+          }
+        });
+      }
+      const transportToggle = popup.querySelector('#transport-visible-toggle');
+      if (transportToggle) {
+        transportToggle.addEventListener('change', ev => {
+          ev.stopPropagation();
+          fetch(TOGGLE_TRANSPORT_VISIBILITY_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              pid: transportToggle.dataset.pid,
+              visible: transportToggle.checked
+            })
+          })
+            .then(resp => resp.json().then(data => ({ ok: resp.ok, data })).catch(() => ({ ok: resp.ok, data: {} })))
+            .then(({ ok, data }) => {
+              if (!ok) throw new Error(data.error || 'No se pudo actualizar Transportes');
+            })
+            .catch(error => {
+              alert(error.message || 'No se pudo actualizar Transportes');
+              transportToggle.checked = !transportToggle.checked;
+            });
+        });
+      }
+
+      const removeArchivedBtn = popup.querySelector('.remove-archived-phase-btn');
+      if (removeArchivedBtn) {
+        removeArchivedBtn.addEventListener('click', ev => {
+          ev.stopPropagation();
+          if (!confirm('¿Eliminar esta fase archivada del calendario?')) return;
+          const payload = { pid: removeArchivedBtn.dataset.pid, phase: removeArchivedBtn.dataset.phase };
+          fetch(REMOVE_ARCHIVED_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload)
+          })
+            .then(resp => resp.json().then(data => ({ ok: resp.ok, data })).catch(() => ({ ok: resp.ok, data: {} })))
+            .then(({ ok, data }) => {
+              if (!ok) {
+                throw new Error(data.error || 'Error eliminando fase archivada');
+              }
+              const targetPid = removeArchivedBtn.dataset.pid;
+              const targetPhase = removeArchivedBtn.dataset.phase;
+              const affectedCells = new Set();
+              document.querySelectorAll('.task').forEach(taskEl => {
+                if (taskEl.dataset.pid === targetPid && taskEl.dataset.phase === targetPhase && taskEl.dataset.archived === 'true') {
+                  const row = taskEl.closest('tr[data-worker]');
+                  const worker = row ? row.dataset.worker : null;
+                  const date = taskEl.dataset.day || null;
+                  taskEl.remove();
+                  if (worker && date) {
+                    affectedCells.add(`${worker}|||${date}`);
+                  }
+                }
+              });
+              affectedCells.forEach(key => {
+                const [worker, date] = key.split('|||');
+                recomputeWorkerDayCell(worker, date);
+              });
+              const projectInfo = PROJECT_DATA[targetPid];
+              if (projectInfo && typeof projectInfo === 'object') {
+                if (projectInfo.phases && Object.prototype.hasOwnProperty.call(projectInfo.phases, targetPhase)) {
+                  delete projectInfo.phases[targetPhase];
+                }
+                if (projectInfo.assigned && Object.prototype.hasOwnProperty.call(projectInfo.assigned, targetPhase)) {
+                  delete projectInfo.assigned[targetPhase];
+                }
+                if (projectInfo.auto_hours && Object.prototype.hasOwnProperty.call(projectInfo.auto_hours, targetPhase)) {
+                  delete projectInfo.auto_hours[targetPhase];
+                }
+                if (Array.isArray(projectInfo.phase_sequence)) {
+                  projectInfo.phase_sequence = projectInfo.phase_sequence.filter(item => item !== targetPhase);
+                }
+                if (Array.isArray(projectInfo.frozen_tasks)) {
+                  projectInfo.frozen_tasks = projectInfo.frozen_tasks.filter(item => item && item.phase !== targetPhase);
+                }
+                if (Array.isArray(projectInfo.frozen_phases)) {
+                  projectInfo.frozen_phases = projectInfo.frozen_phases.filter(ph => ph !== targetPhase);
+                }
+              }
+              popup.style.display = 'none';
+            })
+            .catch(err => {
+              alert(err.message || 'Error eliminando fase archivada');
+            });
+        });
+      }
+      const del = document.getElementById('del-btn');
+      if (del) {
+        del.addEventListener('click', ev => {
+          ev.stopPropagation();
+          if (confirm('¿Borrar fase?')) {
+            fetch(DELETE_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pid: del.dataset.pid, phase: del.dataset.phase })
+            }).then(() => location.reload());
+          }
+        });
+      }
+      const unplan = document.getElementById('unplan-btn');
+      if (unplan) {
+        unplan.addEventListener('click', ev => {
+          ev.stopPropagation();
+          const today = madridDateISO();
+          const body = { pid: unplan.dataset.pid, phase: unplan.dataset.phase, date: today, worker: 'Sin planificar' };
+          const partValue = normalizePartValue(unplan.dataset.part);
+          if (partValue) body.part = partValue;
+          fetch(MOVE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          })
+            .then(resp => resp.json().then(d => ({ ok: resp.ok, data: d })))
+            .then(({ ok, data }) => {
+              if (!ok) {
+                alert(data.error || 'Error');
+                return;
+              }
+              afterMove(data, today);
+            });
+        });
+      }
+      const obsSave = document.getElementById('obs-save');
+      const obsText = document.getElementById('obs-text');
+      if (obsSave && obsText) {
+        obsSave.addEventListener('click', ev => {
+          ev.stopPropagation();
+          const pid = obsSave.dataset.pid;
+          const txt = obsText.value;
+          const url = OBS_URL_TEMPLATE.replace('__PID__', encodeURIComponent(pid));
+          const originalLabel = obsSave.textContent;
+          obsSave.disabled = true;
+          obsSave.textContent = 'Guardando...';
+          fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ observations: txt })
+          })
+            .then(resp => {
+              if (resp.ok) {
+                return resp.text().catch(() => '');
+              }
+              return resp.json().catch(() => ({})).then(data => {
+                throw new Error(data.error || 'Error guardando observaciones');
+              });
+            })
+            .then(() => {
+              if (PROJECT_DATA[pid]) PROJECT_DATA[pid].observations = txt;
+              obsSave.textContent = 'Guardado';
+              setTimeout(() => { obsSave.textContent = originalLabel; }, 1500);
+            })
+            .catch(err => {
+              alert(err.message || 'Error guardando observaciones');
+              obsSave.textContent = originalLabel;
+            })
+            .finally(() => {
+              obsSave.disabled = false;
+            });
+        });
+      }
+      const split = document.getElementById('split-btn');
+      if (split) {
+        split.addEventListener('click', ev => {
+          ev.stopPropagation();
+          splitModal.dataset.pid = split.dataset.pid;
+          splitModal.dataset.phase = split.dataset.phase;
+          splitModal.dataset.date = split.dataset.date;
+          prepareSplitModal(split);
+          splitModal.style.display = 'block';
+        });
+      }
+      const unsplit = document.getElementById('unsplit-btn');
+      if (unsplit) {
+        unsplit.addEventListener('click', ev => {
+          ev.stopPropagation();
+          if (confirm('¿Deshacer divisi\u00f3n de esta fase?')) {
+            fetch(UNSPLIT_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pid: unsplit.dataset.pid, phase: unsplit.dataset.phase })
+            }).then(resp => { if (resp.ok) location.reload(); else resp.json().then(d => alert(d.error || 'Error')); });
+          }
+        });
+      }
+      const addPhaseBtn = popup.querySelector('.add-phase-instance-btn');
+      if (addPhaseBtn) {
+        addPhaseBtn.addEventListener('click', ev => {
+          ev.stopPropagation();
+          const hours = prompt('Horas para la nueva fase:');
+          if (hours === null) return;
+          fetch(ADD_PHASE_INSTANCE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ pid: addPhaseBtn.dataset.pid, phase: addPhaseBtn.dataset.phase, hours })
+          })
+            .then(resp => resp.json().then(data => ({ ok: resp.ok, data })))
+            .then(({ ok, data }) => {
+              if (!ok) {
+                alert(data.error || 'Error creando fase');
+                return;
+              }
+              location.reload();
+            })
+            .catch(err => alert(err.message || 'Error creando fase'));
+        });
+      }
+      const createPhaseBtn = popup.querySelector('.create-phase-btn');
+      if (createPhaseBtn) {
+        createPhaseBtn.addEventListener('click', ev => {
+          ev.stopPropagation();
+          const existingMenu = popup.querySelector('.create-phase-menu');
+          if (existingMenu) {
+            existingMenu.remove();
+            return;
+          }
+          const phaseOptions = PHASES.map(phase => `<option value="${escapeHtml(phase)}">${escapeHtml(phase)}</option>`).join('');
+          createPhaseBtn.insertAdjacentHTML('afterend', `
+            <div class="create-phase-menu">
+              <label>Fase
+                <select class="create-phase-select">${phaseOptions}</select>
+              </label>
+              <label>Horas
+                <input class="create-phase-hours" type="number" min="1" step="1" value="1">
+              </label>
+              <div class="create-phase-actions">
+                <button type="button" class="create-phase-confirm popup-action-btn">Crear</button>
+                <button type="button" class="create-phase-cancel popup-action-btn">Cancelar</button>
+              </div>
+            </div>
+          `);
+          const menu = popup.querySelector('.create-phase-menu');
+          const select = menu.querySelector('.create-phase-select');
+          const hoursInput = menu.querySelector('.create-phase-hours');
+          menu.querySelector('.create-phase-cancel').addEventListener('click', cancelEv => {
+            cancelEv.stopPropagation();
+            menu.remove();
+          });
+          menu.querySelector('.create-phase-confirm').addEventListener('click', confirmEv => {
+            confirmEv.stopPropagation();
+            fetch(ADD_PHASE_INSTANCE_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin',
+              body: JSON.stringify({ pid: createPhaseBtn.dataset.pid, phase: select.value, hours: hoursInput.value })
+            })
+              .then(resp => resp.json().then(data => ({ ok: resp.ok, data })))
+              .then(({ ok, data }) => {
+                if (!ok) {
+                  alert(data.error || 'Error creando fase');
+                  return;
+                }
+                location.reload();
+              })
+              .catch(err => alert(err.message || 'Error creando fase'));
+          });
+        });
+      }
+      if (splitForm && !splitForm.dataset.enhanced) {
+        splitForm.addEventListener('submit', ev => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (!splitModal) return;
+          const manuals = getSplitManualInputs();
+          if (!manuals.length) {
+            alert('Debes indicar al menos una parte.');
+            return;
+          }
+          const parts = [];
+          let invalid = false;
+          manuals.forEach(input => {
+            const value = parseSplitHours(input.value);
+            if (!Number.isInteger(value) || value <= 0) {
+              input.classList.add('split-input-error');
+              invalid = true;
+              return;
+            }
+            parts.push(value);
+          });
+          const remainderValue = splitRemainderInput ? parseSplitHours(splitRemainderInput.value) : null;
+          const total = parseSplitHours(splitModal.dataset.totalHours);
+          let remainderInt = null;
+          if (!Number.isInteger(remainderValue) || remainderValue === null || remainderValue <= 0) {
+            invalid = true;
+          } else {
+            remainderInt = remainderValue;
+            parts.push(remainderInt);
+          }
+          const sumParts = parts.reduce((acc, value) => acc + value, 0);
+          if (total !== null && Number.isFinite(total) && sumParts !== total) {
+            invalid = true;
+          }
+          if (invalid) {
+            alert('Revisa las horas de cada parte. Deben ser enteros positivos y sumar el total de la fase.');
+            updateSplitModalDisplay();
+            return;
+          }
+          const payload = {
+            pid: splitModal.dataset.pid,
+            phase: splitModal.dataset.phase,
+            date: splitModal.dataset.date,
+            parts,
+          };
+          fetch(SPLIT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload)
+          }).then(resp => { if (resp.ok) location.reload(); else resp.json().then(d => alert(d.error || 'Error')); });
+        });
+        splitForm.dataset.enhanced = 'true';
+      }
+      if (splitAddPartButton && !splitAddPartButton.dataset.bound) {
+        splitAddPartButton.addEventListener('click', ev => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const remainderRow = splitRemainderInput ? splitRemainderInput.closest('.split-part-row') : null;
+          const input = createSplitPartRow(null, remainderRow);
+          ensureSplitRemainderInput();
+          updateSplitModalDisplay();
+          if (input) {
+            input.focus();
+          }
+        });
+        splitAddPartButton.dataset.bound = 'true';
+      }
+      if (splitCancel) {
+        splitCancel.addEventListener('click', () => { splitModal.style.display = 'none'; });
+      }
+      const freeze = document.getElementById('freeze-btn');
+      if (freeze) {
+        freeze.addEventListener('click', ev => {
+          ev.stopPropagation();
+          fetch('/toggle_freeze/' + freeze.dataset.pid + '/' + encodeURIComponent(freeze.dataset.phase), {
+            method: 'POST',
+            credentials: 'same-origin'
+          }).then(resp => {
+            if (!resp.ok) {
+              return resp.json().then(d => { throw new Error(d.error || 'Error'); });
+            }
+            location.reload();
+          }).catch(err => {
+            alert(err.message || 'Error');
+          });
+        });
+      }
+      const urgentBtn = document.getElementById('urgent-btn');
+      if (urgentBtn) {
+        urgentBtn.addEventListener('click', ev => {
+          ev.stopPropagation();
+          const pid = String(urgentBtn.dataset.pid || '');
+          const entry = resolveProjectEntry(pid) || {};
+          const next = !Boolean(entry.urgent);
+          entry.urgent = next;
+          PROJECT_DATA[pid] = entry;
+          urgentBtn.style.color = next ? '#fff' : '#a00';
+          urgentBtn.style.background = next ? '#a00' : '#fff';
+          refreshUrgentCellHighlights();
+          const url = TOGGLE_URGENT_URL_TEMPLATE.replace('__PID__', encodeURIComponent(pid));
+          fetch(url, { method: 'POST', credentials: 'same-origin' });
+        });
+      }
+      const launchedToggle = document.getElementById('launched-toggle');
+      if (launchedToggle) {
+        launchedToggle.addEventListener('change', ev => {
+          ev.stopPropagation();
+          const pid = String(launchedToggle.dataset.pid || '');
+          const phase = String(launchedToggle.dataset.phase || '');
+          const partValue = normalizePartValue(launchedToggle.dataset.part);
+          const partToken = normalizePartToken(partValue);
+          const launched = Boolean(launchedToggle.checked);
+          document.querySelectorAll('.task[data-pid]').forEach(taskEl => {
+            if (matchesTaskIdentity(taskEl, pid, phase, partToken)) {
+              taskEl.classList.toggle('launched-task', launched);
+            }
+          });
+          const entry = resolveProjectEntry(pid) || {};
+          const list = Array.isArray(entry.launched_phases) ? [...entry.launched_phases] : [];
+          const idx = list.findIndex(item => item && item.phase === phase && normalizePartToken(item.part) === partToken);
+          if (launched && idx === -1) {
+            const payloadItem = { phase };
+            if (partToken) payloadItem.part = Number.isFinite(Number(partToken)) ? Number(partToken) : partToken;
+            list.push(payloadItem);
+          } else if (!launched && idx !== -1) {
+            list.splice(idx, 1);
+          }
+          entry.launched_phases = list;
+          PROJECT_DATA[pid] = entry;
+          const payload = { phase: launchedToggle.dataset.phase };
+          if (partValue) payload.part = partValue;
+          const url = TOGGLE_LAUNCHED_URL_TEMPLATE.replace('__PID__', encodeURIComponent(pid));
+          fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload)
+          });
+        });
+      }
+      const startForm = document.getElementById('start-form');
+      if (startForm) {
+        startForm.addEventListener('submit', ev => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const btn = document.getElementById('start-btn');
+          const val = document.getElementById('start-input').value;
+          fetch(START_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ pid: btn.dataset.pid, phase: btn.dataset.phase, date: val })
+          }).then(resp => {
+            if (resp.ok) {
+              // previously warned when scheduling before material confirmation, now proceed silently
+              location.reload();
+            } else {
+              resp.json().then(d => alert(d.error || 'Error'));
+            }
+          });
+        });
+      }
+      const hoursForm = document.getElementById('phase-hours-form');
+      if (hoursForm) {
+        hoursForm.addEventListener('submit', ev => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const btn = hoursForm.querySelector('button');
+          const val = document.getElementById('phase-hours-input').value;
+          const payload = { pid: btn.dataset.pid, phase: btn.dataset.phase, hours: val };
+          const partValue = normalizePartValue(btn.dataset.part);
+          if (partValue) {
+            payload.part = partValue;
+          }
+          fetch(PHASE_HOURS_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload)
+          }).then(resp => { if (resp.ok) { reloadKeepingCalendarPosition(); } else { resp.json().then(d => alert(d.error || 'Error')); } });
+        });
+      }
+    });
+  });
+  const rows = projectRows;
+  rows.forEach(row => {
+    row.addEventListener('click', e => {
+      e.stopPropagation();
+      const pid = row.dataset.pid;
+      rows.forEach(r => {
+        if (r.dataset.pid === pid) {
+          r.classList.add('proj-highlight');
+          r.classList.remove('proj-dim');
+        } else {
+          r.classList.add('proj-dim');
+          r.classList.remove('proj-highlight');
+        }
+      });
+      tasks.forEach(t => {
+        if (t.dataset.pid === pid) {
+          t.classList.add('highlight');
+          t.classList.remove('dim');
+        } else {
+          t.classList.add('dim');
+          t.classList.remove('highlight');
+        }
+      });
+      folders.forEach(f => {
+        if (f.dataset.pid === pid) {
+          f.classList.remove('dim');
+        } else {
+          f.classList.add('dim');
+        }
+      });
+    });
+  });
+  document.querySelectorAll('.row-update-btn').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const row = btn.closest('tr');
+      const pid = row.dataset.pid;
+      const data = {pid, phases:{}, phase_parts:[]};
+      row.querySelectorAll('form:not(.delete-form):not(.image-form)').forEach(f => {
+        const fd = new FormData(f);
+        if (f.classList.contains('phase-hours-form')) {
+          const part = fd.get('part');
+          if (part !== null && part !== '') {
+            data.phase_parts.push({phase: fd.get('phase'), part, hours: fd.get('hours')});
+          } else {
+            data.phases[fd.get('phase')] = fd.get('hours');
+          }
+        } else if (f.classList.contains('proj-start-form')) {
+          data.start_date = fd.get('start_date') || fd.get('date');
+        }
+      });
+      const phaseHoursChanged = Object.keys(data.phases).length > 0 || data.phase_parts.length > 0;
+      const imgForm = row.querySelector('.image-form');
+      let imgPromise = Promise.resolve();
+      if (imgForm) {
+        const inp = imgForm.querySelector('input[type=file]');
+        if (inp && inp.files.length) {
+          const fd = new FormData(imgForm);
+          imgPromise = fetch(imgForm.action, {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin'
+          });
+        }
+      }
+      fetch(ROW_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(data)
+      }).then(resp => {
+        if (resp.ok) {
+          imgPromise.then(() => {
+            if (phaseHoursChanged) {
+              reloadKeepingCalendarPosition();
+              return;
+            }
+            const url = new URL(location);
+            url.searchParams.set('highlight', pid);
+            location.href = url;
+          });
+        } else {
+          resp.json().then(d => alert(d.error || 'Error'));
+        }
+      });
+    });
+  });
+
+  document.addEventListener('click', () => {
+    selectedPhaseIndicatorTask = null;
+    clearOffscreenPhaseIndicators();
+    tasks.forEach(o => o.classList.remove('highlight', 'dim'));
+    folders.forEach(f => f.classList.remove('dim'));
+    resetProjectTableRows();
+    popup.style.display = 'none';
+  });
+  popup.addEventListener('click', (e) => e.stopPropagation());
+  function showTask(t) {
+    t.dispatchEvent(new Event('click'));
+    const rect = t.getBoundingClientRect();
+    const wrapperRect = wrapper.getBoundingClientRect();
+    wrapper.scrollLeft += rect.left - wrapperRect.left - wrapper.clientWidth / 2;
+    t.scrollIntoView({behavior: 'smooth', block: 'center'});
+  }
+
+  const params = new URLSearchParams(location.search);
+  const highlight = params.get('highlight');
+  if (highlight) {
+    sessionStorage.setItem('highlightPid', highlight);
+    params.delete('highlight');
+    const url = new URL(location);
+    url.search = params.toString();
+    history.replaceState(null, '', url);
+  }
+  const stored = sessionStorage.getItem('highlightPid');
+  if (stored) {
+    const t = Array.from(tasks).find(o => o.dataset.pid === stored);
+    if (t) {
+      showTask(t);
+    } else {
+      const row = Array.from(rows).find(r => r.dataset.pid === stored);
+      if (row) {
+        row.dispatchEvent(new Event('click'));
+      } else {
+        const folder = Array.from(folders).find(f => f.dataset.pid === stored);
+        if (folder) {
+          folders.forEach(f => {
+            if (f === folder) f.classList.remove('dim');
+            else f.classList.add('dim');
+          });
+        } else {
+          folders.forEach(f => f.classList.add('dim'));
+        }
+      }
+    }
+    sessionStorage.removeItem('highlightPid');
+  }
+
+  const moved = localStorage.getItem(LAST_KEY);
+  if (moved) {
+    const m = JSON.parse(moved);
+    tasks.forEach(t => {
+      if (t.dataset.pid === m.pid && t.dataset.phase === m.phase) {
+        t.classList.add('moved');
+      }
+    });
+    const sd = localStorage.getItem(SCROLL_KEY2);
+    if (sd) {
+      const cell = document.querySelector(`td[data-date='${sd}']`);
+      if (cell) cell.scrollIntoView({behavior:'auto', inline:'center'});
+      localStorage.removeItem(SCROLL_KEY2);
+    }
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey && (e.key === 'z' || e.key === 'Z')) {
+      const info = sessionStorage.getItem('undoMove');
+      if (info) {
+        const req = JSON.parse(info);
+        fetch(MOVE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ pid: req.pid, phase: req.phase, date: req.date, worker: req.worker })
+        })
+          .then(resp => resp.json().then(d => ({ ok: resp.ok, data: d })))
+          .then(({ ok, data }) => {
+            if (!ok) {
+              alert(data.error || 'Error');
+              return;
+            }
+            sessionStorage.removeItem('undoMove');
+            afterMove(data, req.date, req.worker);
+          });
+      }
+    }
+  });
+
+  document.querySelectorAll('.conflict-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pid = link.dataset.pid;
+      const proj = link.dataset.project;
+      let t = null;
+      if (pid) {
+        t = Array.from(tasks).find(o => o.dataset.pid === pid);
+      } else {
+        t = Array.from(tasks).find(o => o.dataset.project === proj);
+      }
+      if (t) {
+        showTask(t);
+      }
+    });
+  });
+  document.querySelectorAll('.affected-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pid = link.dataset.pid;
+      let t = Array.from(tasks).find(o => o.dataset.pid === pid);
+      if (t) {
+        showTask(t);
+      }
+    });
+  });
+
+  function getStartHour(cell, y) {
+    let hours = 0;
+    const tasks = Array.from(cell.querySelectorAll('.task'));
+    for (const t of tasks) {
+      const currentPart = normalizePartValue(t.dataset.part);
+      const draggingPart = dragInfo ? normalizePartValue(dragInfo.part) : '';
+      if (dragInfo && t.dataset.pid === dragInfo.pid && t.dataset.phase === dragInfo.phase && currentPart === draggingPart) continue;
+      const rect = t.getBoundingClientRect();
+      if (y < rect.top + rect.height / 2) break;
+      hours += parseFloat(t.dataset.hours || '0');
+    }
+    return hours;
+  }
+  document.querySelectorAll('tbody td[data-date]').forEach(cell => {
+    cell.addEventListener('dragover', e => { e.preventDefault(); });
+    cell.addEventListener('drop', e => {
+      e.preventDefault();
+      if (cell.classList.contains('deactivated-day')) {
+        alert('No es posible planificar una fase porque ese día ese recurso está desactivado.');
+        return;
+      }
+      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      const date = cell.dataset.date;
+      const worker = cell.closest('tr').dataset.worker;
+      const info = PROJECT_DATA[data.pid] || {};
+      const beforeMaterial = info.material_confirmed_date && date < info.material_confirmed_date;
+      if (lastDrag) {
+        sessionStorage.setItem('undoMove', JSON.stringify(lastDrag));
+      }
+      const start = getStartHour(cell, e.clientY);
+      const moveData = { pid: data.pid, phase: data.phase, date: date, worker: worker, part: data.part, start: start };
+      doMove(moveData, 'split', beforeMaterial);
+    });
+  });
+  function doMove(moveData, mode, beforeMaterial) {
+    moveData.mode = mode;
+    fetch(MOVE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(moveData)
+    })
+    .then(resp => resp.json().then(j => ({ok: resp.ok, data: j})))
+    .then(({ok, data}) => {
+      if (!ok) {
+        if (data.blocked) {
+          pendingBlock = { moveData, mode, beforeMaterial };
+          blockText.textContent = `Hay una fase bloqueada (${data.blocked.name} - ${data.blocked.phase}). ¿Quieres descongelar la fase y que se aplace con el resto o que se atrase lo demás saltándose esa fase?`;
+          blockModal.style.display = 'block';
+          return;
+        }
+        alert(data.error || 'Error');
+        return;
+      }
+      afterMove(data, moveData.date, moveData.worker);
+    });
+  }
+  if (blockUnfreeze) {
+    blockUnfreeze.addEventListener('click', () => {
+      if (pendingBlock) {
+        blockModal.style.display = 'none';
+        pendingBlock.moveData.unblock = true;
+        doMove(pendingBlock.moveData, pendingBlock.mode, pendingBlock.beforeMaterial);
+        pendingBlock = null;
+      }
+    });
+  }
+  if (blockSkip) {
+    blockSkip.addEventListener('click', () => {
+      if (pendingBlock) {
+        blockModal.style.display = 'none';
+        pendingBlock.moveData.skip_block = true;
+        doMove(pendingBlock.moveData, pendingBlock.mode, pendingBlock.beforeMaterial);
+        pendingBlock = null;
+      }
+    });
+  }
+  if (blockCancel) {
+    blockCancel.addEventListener('click', () => {
+      blockModal.style.display = 'none';
+      pendingBlock = null;
+    });
+  }
+  document.querySelectorAll('.unplanned-list').forEach((list) => {
+    list.addEventListener('dragover', (e) => { e.preventDefault(); });
+    list.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      const today = madridDateISO();
+      if (lastDrag) {
+        sessionStorage.setItem('undoMove', JSON.stringify(lastDrag));
+      }
+      fetch(MOVE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ pid: data.pid, phase: data.phase, date: today, worker: 'Sin planificar', part: data.part })
+      })
+        .then(resp => resp.json().then(d => ({ ok: resp.ok, data: d })))
+        .then(({ ok, data }) => {
+          if (!ok) {
+            alert(data.error || 'Error');
+            return;
+          }
+          afterMove(data, today, 'Sin planificar');
+        });
+    });
+  });
+
+  const manualZone = document.getElementById('manual-dropzone');
+
+  function manualDropIndex(zone, clientY) {
+    if (!zone) return 0;
+    const items = Array.from(zone.querySelectorAll('.manual-task'));
+    const filtered = draggedTaskElement ? items.filter(el => el !== draggedTaskElement) : items;
+    let index = filtered.length;
+    for (let i = 0; i < filtered.length; i += 1) {
+      const rect = filtered[i].getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) {
+        index = i;
+        break;
+      }
+    }
+    return index;
+  }
+
+  function refreshManualPlaceholder() {
+    if (!manualZone) return;
+    const placeholder = manualZone.querySelector('.manual-placeholder');
+    if (!placeholder) return;
+    const hasTask = manualZone.querySelector('.manual-task');
+    placeholder.style.display = hasTask ? 'none' : 'block';
+  }
+
+  function persistManualOrder() {
+    if (!manualZone) return;
+    const order = Array.from(manualZone.querySelectorAll('.manual-task')).map((el) => {
+      const rawPart = normalizePartValue(el.dataset.part);
+      let part = null;
+      if (rawPart) {
+        const num = Number(rawPart);
+        part = Number.isFinite(num) ? num : null;
+      }
+      return {
+        pid: el.dataset.pid,
+        phase: el.dataset.phase,
+        part,
+      };
+    });
+    fetch(MANUAL_REORDER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ order }),
+    })
+      .then((resp) => {
+        if (!resp.ok) {
+          return resp
+            .json()
+            .catch(() => ({}))
+            .then((d) => {
+              throw new Error(d.error || 'Error');
+            });
+        }
+        return null;
+      })
+      .catch((err) => {
+        alert(err.message || 'Error');
+      });
+  }
+
+  refreshManualPlaceholder();
+
+  if (manualZone) {
+    manualZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      manualZone.classList.add('drag-over');
+    });
+    manualZone.addEventListener('dragleave', (e) => {
+      if (e.target === manualZone || !manualZone.contains(e.relatedTarget)) {
+        manualZone.classList.remove('drag-over');
+      }
+    });
+    manualZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      manualZone.classList.remove('drag-over');
+      let data = null;
+      try {
+        data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      } catch (err) {
+        data = null;
+      }
+      if (!data) return;
+      const index = manualDropIndex(manualZone, e.clientY);
+      if (dragInfo && dragInfo.manual) {
+        const el = draggedTaskElement;
+        if (el) {
+          const siblings = Array.from(manualZone.querySelectorAll('.manual-task')).filter((item) => item !== el);
+          if (index >= siblings.length) {
+            manualZone.appendChild(el);
+          } else {
+            manualZone.insertBefore(el, siblings[index]);
+          }
+          persistManualOrder();
+          refreshManualPlaceholder();
+        }
+        return;
+      }
+      const today = madridDateISO();
+      if (lastDrag) {
+        sessionStorage.setItem('undoMove', JSON.stringify(lastDrag));
+      }
+      const payload = {
+        pid: data.pid,
+        phase: data.phase,
+        date: today,
+        worker: 'Sin planificar',
+        part: data.part,
+        manual_bucket: true,
+        manual_position: index,
+      };
+      const placeholder = manualZone.querySelector('.manual-placeholder');
+      if (placeholder) placeholder.style.display = 'none';
+      fetch(MOVE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+      })
+        .then((resp) => resp.json().then((d) => ({ ok: resp.ok, data: d })))
+        .then(({ ok, data: moveData }) => {
+          if (!ok) {
+            alert(moveData.error || 'Error');
+            return;
+          }
+          afterMove(moveData, today, 'Sin planificar');
+        });
+    });
+  }
+  const unplanPanel = document.getElementById('unplanned-panel');
+  const unplanResizer = document.getElementById('unplanned-resizer');
+  const UNPLAN_WIDTH_KEY = 'unplannedWidth';
+
+  function syncUnplannedHeight() {
+    const wrap = document.querySelector('.schedule-wrapper');
+    if (wrap && unplanPanel) {
+      unplanPanel.style.height = wrap.offsetHeight + 'px';
+    }
+  }
+
+  syncUnplannedHeight();
+  window.addEventListener('resize', syncUnplannedHeight);
+  if (unplanPanel) {
+    const savedWidth = localStorage.getItem(UNPLAN_WIDTH_KEY);
+    if (savedWidth) {
+      unplanPanel.style.width = savedWidth + 'px';
+    }
+  }
+  if (unplanPanel && unplanResizer) {
+    let startX, startWidth;
+    const onMouseMove = (e) => {
+      const dx = startX - e.clientX;
+      const newWidth = Math.max(100, startWidth + dx);
+      unplanPanel.style.width = newWidth + 'px';
+    };
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      localStorage.setItem(UNPLAN_WIDTH_KEY, unplanPanel.offsetWidth);
+    };
+    unplanResizer.addEventListener('mousedown', (e) => {
+      startX = e.clientX;
+      startWidth = unplanPanel.offsetWidth;
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+  }
+  document.querySelectorAll('.task.vacation, .task.deactivated').forEach(div => {
+    div.addEventListener('click', () => {
+      const del = div.querySelector('.vac-delete, .deact-delete');
+      if (del) del.style.display = 'block';
+    });
+  });
+  document.querySelectorAll('.vac-delete').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const parent = btn.parentElement;
+      const worker = parent.dataset.worker;
+      const day = parent.dataset.day;
+      fetch('/remove_vacation', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `worker=${encodeURIComponent(worker)}&date=${encodeURIComponent(day)}`
+      }).then(() => location.reload());
+    });
+  });
+  document.querySelectorAll('.deact-delete').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const parent = btn.parentElement;
+      const worker = parent.dataset.worker;
+      fetch(REMOVE_DEACTIVATED_WORKER_URL, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `worker=${encodeURIComponent(worker)}`
+      }).then(() => location.reload());
+    });
+  });
+  const UNPLANNED_COLLAPSE_KEY = 'unplannedCollapsedGroups';
+  let unplannedCollapsed = {};
+  try {
+    unplannedCollapsed = JSON.parse(localStorage.getItem(UNPLANNED_COLLAPSE_KEY) || '{}') || {};
+  } catch (_) {
+    unplannedCollapsed = {};
+  }
+  function saveUnplannedCollapsed() {
+    localStorage.setItem(UNPLANNED_COLLAPSE_KEY, JSON.stringify(unplannedCollapsed));
+  }
+  function applyCollapsedState(btn, content, key) {
+    const isCollapsed = !!unplannedCollapsed[key];
+    content.style.display = isCollapsed ? 'none' : 'block';
+    btn.innerHTML = isCollapsed ? '&#43;' : '&#8722;';
+  }
+  const collapseControls = [];
+  document.querySelectorAll('.folder-toggle').forEach((btn) => {
+    const folder = btn.closest('.unplanned-folder');
+    const content = btn.parentElement.nextElementSibling;
+    if (!folder || !content) return;
+    const listMode = (folder.closest('.unplanned-list') || {}).dataset ? folder.closest('.unplanned-list').dataset.mode : '';
+    const key = `folder:${listMode || ''}:${folder.dataset.pid || ''}:${folder.dataset.status || ''}`;
+    collapseControls.push({ key, btn, content });
+    applyCollapsedState(btn, content, key);
+    btn.addEventListener('click', () => {
+      unplannedCollapsed[key] = !unplannedCollapsed[key];
+      applyCollapsedState(btn, content, key);
+      saveUnplannedCollapsed();
+    });
+  });
+  document.querySelectorAll('.group-toggle').forEach((btn) => {
+    const key = btn.dataset.groupKey || '';
+    if (!key) return;
+    const content = document.querySelector(`[data-group-content="${CSS.escape(key)}"]`);
+    if (!content) return;
+    collapseControls.push({ key, btn, content });
+    applyCollapsedState(btn, content, key);
+    btn.addEventListener('click', () => {
+      unplannedCollapsed[key] = !unplannedCollapsed[key];
+      applyCollapsedState(btn, content, key);
+      saveUnplannedCollapsed();
+    });
+  });
+  const toggleAllUnplannedBtn = document.getElementById('toggle-all-unplanned-btn');
+  if (toggleAllUnplannedBtn) {
+    toggleAllUnplannedBtn.addEventListener('click', () => {
+      const activeList = Array.from(document.querySelectorAll('.unplanned-list[data-mode]')).find((list) => list.style.display !== 'none');
+      const activeMode = activeList ? (activeList.dataset.mode || '') : '';
+      const visibleControls = collapseControls.filter((entry) => {
+        const list = entry.content.closest('.unplanned-list');
+        if (list && list.style.display === 'none') return false;
+        if (activeMode === 'status' || activeMode === 'due') {
+          return String(entry.key || '').startsWith('folder:');
+        }
+        if (activeMode === 'phase') {
+          return String(entry.key || '').startsWith('phase:');
+        }
+        return true;
+      });
+      if (!visibleControls.length) return;
+      const hasExpanded = visibleControls.some((entry) => !unplannedCollapsed[entry.key]);
+      visibleControls.forEach((entry) => {
+        unplannedCollapsed[entry.key] = hasExpanded;
+        applyCollapsedState(entry.btn, entry.content, entry.key);
+      });
+      saveUnplannedCollapsed();
+    });
+  }
+  const projToggle = document.getElementById('projects-toggle');
+  if (projToggle) {
+    const projDiv = document.querySelector('.complete-projects');
+    projToggle.addEventListener('click', () => {
+      projDiv.classList.toggle('collapsed');
+      projToggle.innerHTML = projDiv.classList.contains('collapsed') ? '&#43;' : '&#8722;';
+    });
+  }
+  document.querySelectorAll('.proj-start-form').forEach(f => {
+    f.addEventListener('submit', ev => {
+      ev.preventDefault();
+      const data = new FormData(f);
+      fetch(PROJ_START_URL, { method: 'POST', body: data, credentials: 'same-origin' })
+        .then(resp => {
+          if (resp.ok) { location.reload(); } else { resp.json().then(d => alert(d.error || 'Error')); }
+        });
+    });
+  });
+  document.querySelectorAll('.phase-hours-form').forEach(f => {
+    f.addEventListener('submit', ev => {
+      ev.preventDefault();
+      const data = new FormData(f);
+      const part = data.get('part');
+      if (part !== null && part !== '') {
+        fetch(ROW_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            pid: data.get('pid'),
+            phase_parts: [{phase: data.get('phase'), part, hours: data.get('hours')}],
+          }),
+        }).then(resp => {
+          if (resp.ok) { reloadKeepingCalendarPosition(); } else { resp.json().then(d => alert(d.error || 'Error')); }
+        });
+        return;
+      }
+      fetch(PHASE_HOURS_URL, { method: 'POST', body: data, credentials: 'same-origin' })
+        .then(resp => {
+          if (resp.ok) {
+            const url = new URL(location);
+            url.searchParams.set('highlight', data.get('pid'));
+            location.href = url;
+          } else {
+            resp.json().then(d => alert(d.error || 'Error'));
+          }
+        });
+    });
+  });
+
+  // Save image immediately when selected
+  document.querySelectorAll('.image-form input[type=file]').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const form = inp.closest('form');
+      const fd = new FormData(form);
+      fetch(form.action, {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin'
+      }).then(resp => {
+        if (resp.ok) {
+          location.reload();
+        } else {
+          resp.json().then(d => alert(d.error || 'Error'));
+        }
+      });
+    });
+  });
+  const CONFLICTS = {{ conflicts|tojson }};
+  const conflictModal = document.getElementById("conflict-modal");
+  const conflictText = document.getElementById("conflict-text");
+  const conflictClose = document.getElementById("conflict-close");
+  const seen = JSON.parse(localStorage.getItem('seenConflicts') || '{}');
+  const NEW_CONFLICTS = CONFLICTS.filter(
+    c => !seen[c.key]
+  );
+  let conflictIndex = 0;
+  function showNextConflict() {
+    if (conflictIndex < NEW_CONFLICTS.length) {
+      const c = NEW_CONFLICTS[conflictIndex];
+      conflictText.textContent = c.project + " - " + (c.client || '') + ": " + c.message;
+      conflictModal.style.display = "block";
+    } else {
+      conflictModal.style.display = "none";
+    }
+  }
+  if (NEW_CONFLICTS.length) {
+    showNextConflict();
+    conflictClose.addEventListener("click", () => {
+      const c = NEW_CONFLICTS[conflictIndex];
+      seen[c.key] = true;
+      localStorage.setItem('seenConflicts', JSON.stringify(seen));
+      conflictIndex++;
+      showNextConflict();
+    });
+  }
+
+  const reloadModal = document.getElementById('reload-modal');
+  let lastCompleteTimestamp = null;
+
+  function showReloadModal() {
+    if (!reloadModal || reloadModal.style.display === 'flex') return;
+    reloadModal.style.display = 'flex';
+    reloadModal.setAttribute('aria-hidden', 'false');
+  }
+
+  function checkCompleteUpdates() {
+    if (!COMPLETE_UPDATE_URL || (reloadModal && reloadModal.style.display === 'flex')) return;
+    fetch(COMPLETE_UPDATE_URL, { credentials: 'same-origin' })
+      .then(resp => resp.json())
+      .then(data => {
+        const nextStamp = Number(data.timestamp || 0);
+        if (lastCompleteTimestamp === null) {
+          lastCompleteTimestamp = nextStamp;
+          return;
+        }
+        if (nextStamp > lastCompleteTimestamp) {
+          showReloadModal();
+        }
+      })
+      .catch(err => {
+        console.error('Error comprobando cambios externos', err);
+      });
+  }
+
+  checkCompleteUpdates();
+  setInterval(checkCompleteUpdates, 15000);
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      if (conflictModal && conflictClose && conflictModal.style.display === 'block') conflictClose.click();
+      if (splitModal && splitModal.style.display === 'block') splitCancel.click();
+      if (blockModal && blockModal.style.display === 'block') blockCancel.click();
+    }
+  });
+  });
+</script>
+{% endblock %}

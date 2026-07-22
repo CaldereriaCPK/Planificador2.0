@@ -1,0 +1,163 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Estado y copias de seguridad de planificación</h2>
+<p>Última captura: <span id="snapshot-timestamp">{{ snapshot.timestamp }}</span></p>
+<div class="snapshot-actions">
+  <div class="snapshot-search">
+    <label for="snapshot-search-input">Buscar en toda la tabla:</label>
+    <input type="text" id="snapshot-search-input" placeholder="Buscar..." />
+  </div>
+  <button id="snapshot-refresh">Actualizar</button>
+</div>
+
+<table class="snapshot-table" id="snapshot-table">
+    <thead>
+        <tr>
+            <th data-key="tipo">Tipo</th>
+            <th data-key="proyecto">Proyecto/Pedido</th>
+            <th data-key="fase">Fase</th>
+            <th data-key="parte">Parte</th>
+            <th data-key="fecha_o_celda">Fecha o celda</th>
+            <th data-key="horas">Horas</th>
+            <th data-key="recurso_o_columna">Recurso / Columna</th>
+            <th data-key="estado">Estado</th>
+            <th data-key="columnname">Columnname</th>
+        </tr>
+        <tr class="snapshot-filters">
+            <th><input class="snapshot-filter" data-key="tipo" placeholder="Filtrar tipo" /></th>
+            <th><input class="snapshot-filter" data-key="proyecto" placeholder="Filtrar proyecto" /></th>
+            <th><input class="snapshot-filter" data-key="fase" placeholder="Filtrar fase" /></th>
+            <th><input class="snapshot-filter" data-key="parte" placeholder="Filtrar parte" /></th>
+            <th><input class="snapshot-filter" data-key="fecha_o_celda" placeholder="Filtrar fecha/celda" /></th>
+            <th><input class="snapshot-filter" data-key="horas" placeholder="Filtrar horas" /></th>
+            <th><input class="snapshot-filter" data-key="recurso_o_columna" placeholder="Filtrar recurso/columna" /></th>
+            <th><input class="snapshot-filter" data-key="estado" placeholder="Filtrar estado" /></th>
+            <th><input class="snapshot-filter" data-key="columnname" placeholder="Filtrar columnname" /></th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+<script>
+(function() {
+  const columns = ['tipo','proyecto','fase','parte','fecha_o_celda','horas','recurso_o_columna','estado','columnname'];
+  const refreshBtn = document.getElementById('snapshot-refresh');
+  const tableBody = document.querySelector('#snapshot-table tbody');
+  const timestampEl = document.getElementById('snapshot-timestamp');
+  const searchInput = document.getElementById('snapshot-search-input');
+  const filterInputs = Array.from(document.querySelectorAll('.snapshot-filter'));
+  const headerCells = Array.from(document.querySelectorAll('#snapshot-table thead tr:first-child th'));
+  let allRows = [];
+  let sortKey = null;
+  let sortDirection = 'asc';
+
+  function renderRows(rows) {
+    tableBody.innerHTML = '';
+    rows.forEach((row) => {
+      const tr = document.createElement('tr');
+      columns.forEach((key) => {
+        const td = document.createElement('td');
+        td.textContent = row[key] === undefined || row[key] === null ? '' : row[key];
+        tr.appendChild(td);
+      });
+      tableBody.appendChild(tr);
+    });
+  }
+
+  function normalize(value) {
+    if (value === undefined || value === null) return '';
+    return String(value).toLowerCase();
+  }
+
+  function applySort(rows) {
+    if (!sortKey) return rows;
+    const sorted = [...rows];
+    sorted.sort((a, b) => {
+      const left = normalize(a[sortKey]);
+      const right = normalize(b[sortKey]);
+      if (left === right) return 0;
+      const direction = sortDirection === 'asc' ? 1 : -1;
+      return left > right ? direction : -direction;
+    });
+    return sorted;
+  }
+
+  function updateSortIndicators() {
+    headerCells.forEach((th) => {
+      const key = th.getAttribute('data-key');
+      if (key === sortKey) {
+        th.classList.remove('sort-asc', 'sort-desc');
+        th.classList.add(sortDirection === 'asc' ? 'sort-asc' : 'sort-desc');
+      } else {
+        th.classList.remove('sort-asc', 'sort-desc');
+      }
+    });
+  }
+
+  function passesFilters(row) {
+    const searchTerm = normalize(searchInput.value);
+    const values = columns.map((col) => normalize(row[col]));
+    const matchesSearch = !searchTerm || values.some((val) => val.includes(searchTerm));
+    if (!matchesSearch) return false;
+
+    return filterInputs.every((input) => {
+      const filterVal = normalize(input.value);
+      if (!filterVal) return true;
+      const key = input.getAttribute('data-key');
+      return normalize(row[key]).includes(filterVal);
+    });
+  }
+
+  function refreshTable() {
+    const filtered = allRows.filter((row) => passesFilters(row));
+    const sorted = applySort(filtered);
+    renderRows(sorted);
+  }
+
+  function applySnapshot(data) {
+    if (!data) return;
+    timestampEl.textContent = data.timestamp || '';
+    allRows = data.table_rows || [];
+    refreshTable();
+  }
+
+  function requestSnapshot(forceSave) {
+    const method = forceSave ? 'POST' : 'GET';
+    fetch('{{ url_for('planning_snapshot_api') }}', {method})
+      .then((resp) => resp.json())
+      .then(applySnapshot)
+      .catch((err) => console.error('Error actualizando snapshot', err));
+  }
+
+  headerCells.forEach((th) => {
+    th.addEventListener('click', () => {
+      const key = th.getAttribute('data-key');
+      if (!key) return;
+      if (sortKey === key) {
+        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortKey = key;
+        sortDirection = 'asc';
+      }
+      updateSortIndicators();
+      refreshTable();
+    });
+  });
+
+  filterInputs.forEach((input) => {
+    input.addEventListener('input', () => {
+      refreshTable();
+    });
+  });
+
+  searchInput.addEventListener('input', () => {
+    refreshTable();
+  });
+
+  refreshBtn.addEventListener('click', () => requestSnapshot(true));
+  setInterval(() => requestSnapshot(true), 60 * 60 * 1000);
+  const initialSnapshot = {{ snapshot | tojson | safe }};
+  applySnapshot(initialSnapshot);
+  requestSnapshot(true);
+})();
+</script>
+{% endblock %}

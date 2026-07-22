@@ -1,0 +1,426 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Seguimiento semanal</h1>
+<div class="weekly-toolbar">
+  <div class="weekly-filter-group">
+    <button type="button" id="filter-delays-btn" class="weekly-filter-btn" aria-pressed="false">Atrasos</button>
+    <button type="button" id="hide-all-previews-btn" class="weekly-filter-btn" aria-pressed="false">Ocultar detalles</button>
+    <input type="text" id="weekly-text-filter" class="weekly-text-filter" placeholder="Filtrar por proyecto, cliente, fase, origen...">
+  </div>
+  <div class="weekly-filter-group" id="phase-filter-group">
+    <button type="button" class="weekly-filter-btn weekly-phase-filter active" data-phase-filter="" aria-pressed="true">Todas</button>
+    <button type="button" class="weekly-filter-btn weekly-phase-filter" data-phase-filter="Lanzamiento" aria-pressed="false">Lanzamiento</button>
+    <button type="button" class="weekly-filter-btn weekly-phase-filter" data-phase-filter="Material" aria-pressed="false">Material</button>
+    <button type="button" class="weekly-filter-btn weekly-phase-filter" data-phase-filter="Caldereria" aria-pressed="false">Caldereria</button>
+    <button type="button" class="weekly-filter-btn weekly-phase-filter" data-phase-filter="Tratamiento" aria-pressed="false">Tratamiento</button>
+    <button type="button" class="weekly-filter-btn weekly-phase-filter" data-phase-filter="Mecanizado" aria-pressed="false">Mecanizado</button>
+  </div>
+  <div class="weekly-filter-group">
+    <a href="{{ url_for('weekly_tracking_minutes_pdf') }}" class="weekly-filter-btn weekly-generate-acta">Generar acta</a>
+    <div id="weekly-hidden-columns" class="weekly-hidden-columns"></div>
+  </div>
+</div>
+<div class="weekly-table-wrap">
+  <table id="weekly-table" class="weekly-table">
+    <colgroup>
+      <col data-col-key="imagen" data-default-width="320">
+      <col data-col-key="proyecto" data-default-width="320">
+      <col data-col-key="fase" data-default-width="170">
+      <col data-col-key="origen" data-default-width="170">
+      <col data-col-key="motivo" data-default-width="180">
+      <col data-col-key="accion_prev" data-default-width="280">
+      <col data-col-key="accion_hoy" data-default-width="280">
+      <col data-col-key="explicacion" data-default-width="500">
+    </colgroup>
+    <thead>
+      <tr>
+        <th data-col-key="imagen">Imagen</th>
+        <th data-col-key="proyecto">Proyecto</th>
+        <th data-col-key="fase">Fase actual</th>
+        <th data-col-key="origen">Origen del atraso</th>
+        <th data-col-key="motivo">Motivo</th>
+        <th data-col-key="accion_prev">Tareas última reunión ({{ previous_meeting_date }})</th>
+        <th data-col-key="accion_hoy">Tareas hoy</th>
+        <th data-col-key="explicacion">Explicación</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr data-pid="{{ row.pid }}" data-delayed="{{ '1' if row.is_delayed else '0' }}" data-phase="{{ row.phase }}" draggable="true">
+        <td>
+          {% if row.image %}
+          <img src="{{ url_for('static', filename=row.image) }}" alt="{{ row.project_display }}" class="weekly-image">
+          {% endif %}
+        </td>
+        <td>
+          <button type="button" class="weekly-project-preview-btn" data-project="{{ row.project_display }}">{{ row.project_display }}</button>
+        </td>
+        <td class="weekly-phase-cell {{ 'weekly-phase-delayed' if row.is_delayed else 'weekly-phase-ok' }}">{{ row.phase_display or row.phase }}</td>
+        <td>{{ row.origin }}</td>
+        <td>{{ row.motive }}</td>
+        <td class="weekly-action-cell" data-kind="previous" data-pid="{{ row.pid }}">
+          <div class="weekly-task-list">
+            {% for task in row.previous_tasks %}
+            <div class="weekly-task-row" data-created-at="{{ task.created_at }}">
+              <input type="checkbox" class="weekly-task-check">
+              <input type="text" class="weekly-task-text" value="{{ task.text }}">
+            </div>
+            {% endfor %}
+          </div>
+          <input type="text" class="weekly-task-new" placeholder="Añadir tarea...">
+          <div class="weekly-save-status" aria-live="polite"></div>
+        </td>
+        <td class="weekly-action-cell" data-kind="today" data-pid="{{ row.pid }}">
+          <div class="weekly-task-list">
+            {% for task in row.today_tasks %}
+            <div class="weekly-task-row" data-created-at="{{ task.created_at }}">
+              <input type="checkbox" class="weekly-task-check">
+              <input type="text" class="weekly-task-text" value="{{ task.text }}">
+            </div>
+            {% endfor %}
+          </div>
+          <input type="text" class="weekly-task-new" placeholder="Añadir tarea...">
+          <div class="weekly-save-status" aria-live="polite"></div>
+        </td>
+        <td>{{ row.explanation }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .weekly-toolbar { margin: 10px 0 14px; display:flex; flex-direction:column; gap:10px; }
+  .weekly-filter-group { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .weekly-filter-btn { padding: 8px 14px; border: 1px solid #666; border-radius: 6px; cursor: pointer; background:#fff; text-decoration:none; color:inherit; }
+  .weekly-filter-btn.active { background: #c0392b; color: #fff; border-color: #a93226; }
+  .weekly-text-filter { min-width: 280px; padding: 8px 10px; border-radius: 6px; border:1px solid #999; }
+  .weekly-hidden-columns { display:flex; gap:6px; }
+  .weekly-hidden-plus { border:1px solid #999; border-radius:4px; width:24px; height:24px; line-height:22px; text-align:center; cursor:pointer; background:#fff; }
+  .weekly-table-wrap { overflow: auto; }
+  .weekly-table { width: max-content; border-collapse: collapse; table-layout: fixed; }
+  .weekly-table th, .weekly-table td { border: 1px solid #ddd; padding: 8px; vertical-align: top; position: relative; }
+  .weekly-table th[data-col-key] { cursor:pointer; }
+  .weekly-image { max-width: 300px; width: 100%; height: auto; display: block; }
+  .weekly-phase-delayed { background: #f8d7da; }
+  .weekly-phase-ok { background: #d4edda; }
+  .weekly-action-cell { position: relative; padding: 0 !important; }
+  .weekly-task-list { padding: 8px 8px 2px; display:flex; flex-direction:column; gap:6px; }
+  .weekly-task-row { display:flex; align-items:center; gap:8px; }
+  .weekly-task-text { flex:1; min-width: 0; border:1px solid #ccc; border-radius:4px; padding:4px 6px; }
+  .weekly-task-new { width: calc(100% - 16px); margin: 0 8px 8px; border:1px dashed #aaa; border-radius:4px; padding:4px 6px; }
+  .weekly-save-status { position: absolute; right: 4px; bottom: 2px; font-size: 10px; line-height: 1; color: #666; min-height: 0; background: rgba(255,255,255,0.75); padding: 1px 3px; border-radius: 3px; pointer-events: none; }
+  .column-resizer { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; }
+  .column-resizer:hover { background: rgba(0,0,0,0.1); }
+  .weekly-table tbody tr { cursor: grab; }
+  .weekly-table tbody tr.dragging { opacity: 0.45; }
+  .weekly-table tbody tr.drag-over { outline: 2px dashed #a93226; }
+  .weekly-project-preview-btn { background: none; border: none; color: #0b57d0; text-decoration: underline; cursor: pointer; padding: 0; text-align: left; font: inherit; }
+  .weekly-inline-preview-row td { background: #fafafa; }
+  .weekly-inline-preview-grid { display:grid; grid-template-columns: repeat(5, minmax(160px,1fr)); gap:8px; }
+  .weekly-inline-preview-item { border:1px solid #ddd; border-radius:4px; padding:6px; min-height:52px; }
+  .weekly-inline-preview-item .k { font-size:11px; color:#666; display:block; }
+  .weekly-inline-preview-item .v { font-weight:600; }
+</style>
+
+<script>
+(() => {
+  const ACTION_URL_TEMPLATE = "{{ url_for('update_weekly_tracking_action', pid='__PID__') }}";
+  const ROW_DETAILS = {{ rows|tojson }};
+  const DETAILS_BY_PID = new Map(ROW_DETAILS.map((r) => [String(r.pid || ''), r]));
+  const table = document.getElementById('weekly-table');
+  const tbody = table.querySelector('tbody');
+  const filterBtn = document.getElementById('filter-delays-btn');
+  const hideAllPreviewsBtn = document.getElementById('hide-all-previews-btn');
+  const phaseFilterButtons = Array.from(document.querySelectorAll('.weekly-phase-filter'));
+  const textFilterInput = document.getElementById('weekly-text-filter');
+  const hiddenColumnsWrap = document.getElementById('weekly-hidden-columns');
+  let delayedOnly = false;
+  let selectedPhase = '';
+  let textFilter = '';
+  const FILTER_STATE_KEY = 'weekly-filter-state';
+  const PREVIEW_STATE_KEY = 'weekly-open-previews';
+  const HIDDEN_COLS_KEY = 'weekly-hidden-cols';
+
+  function saveFilterState() { localStorage.setItem(FILTER_STATE_KEY, JSON.stringify({ delayedOnly, selectedPhase, textFilter })); }
+  function loadFilterState() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(FILTER_STATE_KEY) || '{}');
+      delayedOnly = !!parsed.delayedOnly;
+      selectedPhase = typeof parsed.selectedPhase === 'string' ? parsed.selectedPhase : '';
+      textFilter = typeof parsed.textFilter === 'string' ? parsed.textFilter : '';
+    } catch (_) {}
+  }
+  function matchesText(row) {
+    if (!textFilter) return true;
+    const q = textFilter.toLowerCase();
+    return (row.textContent || '').toLowerCase().includes(q);
+  }
+  function renderFilter() {
+    Array.from(tbody.querySelectorAll('tr[data-pid]')).forEach((row) => {
+      const delayed = row.dataset.delayed === '1';
+      const phase = (row.dataset.phase || '').trim();
+      const visible = (!delayedOnly || delayed) && (!selectedPhase || phase === selectedPhase) && matchesText(row);
+      row.style.display = visible ? '' : 'none';
+      const preview = tbody.querySelector(`tr.weekly-inline-preview-row[data-parent-pid="${CSS.escape(row.dataset.pid || '')}"]`);
+      if (preview) preview.style.display = visible ? '' : 'none';
+    });
+    filterBtn.classList.toggle('active', delayedOnly);
+    filterBtn.setAttribute('aria-pressed', delayedOnly ? 'true' : 'false');
+    phaseFilterButtons.forEach((btn) => {
+      const active = (btn.dataset.phaseFilter || '') === selectedPhase;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    if (textFilterInput && textFilterInput.value !== textFilter) textFilterInput.value = textFilter;
+    saveFilterState();
+  }
+
+  function loadOpenPreviewState() { try { return JSON.parse(localStorage.getItem(PREVIEW_STATE_KEY) || '[]'); } catch (_) { return []; } }
+  function saveOpenPreviewState(pids) { localStorage.setItem(PREVIEW_STATE_KEY, JSON.stringify(Array.from(new Set((pids || []).map(String))))); }
+  function setPreviewOpen(pid, open) {
+    const set = new Set(loadOpenPreviewState().map(String));
+    if (open) set.add(String(pid)); else set.delete(String(pid));
+    saveOpenPreviewState(Array.from(set));
+  }
+
+  function removeInlinePreview(pid) {
+    const node = tbody.querySelector(`tr.weekly-inline-preview-row[data-parent-pid="${CSS.escape(String(pid || ''))}"]`);
+    if (node) node.remove();
+  }
+  function removeAllInlinePreviews() {
+    tbody.querySelectorAll('tr.weekly-inline-preview-row').forEach((n) => n.remove());
+    saveOpenPreviewState([]);
+  }
+  function renderInlinePreview(afterRow, pid) {
+    removeInlinePreview(pid);
+    const payload = DETAILS_BY_PID.get(String(pid || '')) || {};
+    const details = Array.isArray(payload.date_details) ? payload.date_details : [];
+    const previewRow = document.createElement('tr');
+    previewRow.className = 'weekly-inline-preview-row';
+    previewRow.dataset.parentPid = String(pid || '');
+    const td = document.createElement('td');
+    td.colSpan = 8;
+    const grid = document.createElement('div');
+    grid.className = 'weekly-inline-preview-grid';
+    details.forEach((item) => {
+      const box = document.createElement('div');
+      box.className = 'weekly-inline-preview-item';
+      box.innerHTML = `<span class="k">${item.label || ''}</span><span class="v">${item.value || '-'}</span>`;
+      grid.appendChild(box);
+    });
+    td.appendChild(grid);
+    previewRow.appendChild(td);
+    afterRow.insertAdjacentElement('afterend', previewRow);
+    setPreviewOpen(pid, true);
+    renderFilter();
+  }
+
+  filterBtn.addEventListener('click', () => { delayedOnly = !delayedOnly; renderFilter(); });
+  phaseFilterButtons.forEach((btn) => btn.addEventListener('click', () => { selectedPhase = btn.dataset.phaseFilter || ''; renderFilter(); }));
+  if (textFilterInput) textFilterInput.addEventListener('input', () => { textFilter = (textFilterInput.value || '').trim(); renderFilter(); });
+
+  document.querySelectorAll('.weekly-project-preview-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('tr[data-pid]');
+      if (!row) return;
+      const pid = row.dataset.pid || '';
+      const existing = tbody.querySelector(`tr.weekly-inline-preview-row[data-parent-pid="${CSS.escape(pid)}"]`);
+      if (existing) {
+        existing.remove();
+        setPreviewOpen(pid, false);
+      } else {
+        renderInlinePreview(row, pid);
+      }
+    });
+  });
+  hideAllPreviewsBtn.addEventListener('click', () => removeAllInlinePreviews());
+
+  loadFilterState();
+  renderFilter();
+  loadOpenPreviewState().forEach((pid) => {
+    const row = tbody.querySelector(`tr[data-pid="${CSS.escape(String(pid))}"]`);
+    if (row) renderInlinePreview(row, String(pid));
+  });
+
+  const ROW_ORDER_KEY = 'weekly-row-order';
+  function saveRowOrder() {
+    const ordered = Array.from(tbody.querySelectorAll('tr[data-pid]')).map((row) => (row.dataset.pid || '').trim()).filter(Boolean);
+    localStorage.setItem(ROW_ORDER_KEY, JSON.stringify(ordered));
+  }
+  function applyStoredRowOrder() {
+    let stored = [];
+    try { stored = JSON.parse(localStorage.getItem(ROW_ORDER_KEY) || '[]'); } catch (_) {}
+    if (!Array.isArray(stored)) return;
+    const byPid = new Map(Array.from(tbody.querySelectorAll('tr[data-pid]')).map((r) => [String(r.dataset.pid || ''), r]));
+    stored.forEach((pid) => { const row = byPid.get(String(pid)); if (row) tbody.appendChild(row); });
+  }
+  applyStoredRowOrder();
+
+  let draggingRow = null;
+  function clearDragMarks() { tbody.querySelectorAll('tr.drag-over').forEach((row) => row.classList.remove('drag-over')); }
+  Array.from(tbody.querySelectorAll('tr[data-pid]')).forEach((row) => {
+    row.addEventListener('dragstart', () => { draggingRow = row; row.classList.add('dragging'); });
+    row.addEventListener('dragend', () => { row.classList.remove('dragging'); clearDragMarks(); saveRowOrder(); draggingRow = null; });
+    row.addEventListener('dragover', (ev) => {
+      ev.preventDefault();
+      if (!draggingRow || draggingRow === row) return;
+      clearDragMarks(); row.classList.add('drag-over');
+      const rect = row.getBoundingClientRect();
+      const insertAfter = ev.clientY > rect.top + rect.height / 2;
+      tbody.insertBefore(draggingRow, insertAfter ? row.nextSibling : row);
+    });
+    row.addEventListener('drop', (ev) => { ev.preventDefault(); clearDragMarks(); saveRowOrder(); });
+  });
+
+  const saveTimers = new Map();
+  function collectTasks(cell) {
+    return Array.from(cell.querySelectorAll('.weekly-task-row')).map((row) => ({
+      text: (row.querySelector('.weekly-task-text')?.value || '').trim(),
+      created_at: row.dataset.createdAt || new Date().toISOString(),
+    })).filter((item) => item.text);
+  }
+  function collectPayloadForPid(pid) {
+    const previousCell = table.querySelector(`.weekly-action-cell[data-kind="previous"][data-pid="${CSS.escape(pid)}"]`);
+    const todayCell = table.querySelector(`.weekly-action-cell[data-kind="today"][data-pid="${CSS.escape(pid)}"]`);
+    return {
+      previous_tasks: previousCell ? collectTasks(previousCell) : [],
+      today_tasks: todayCell ? collectTasks(todayCell) : [],
+    };
+  }
+  function scheduleSaveForPid(pid) {
+    if (!pid) return;
+    const cells = Array.from(table.querySelectorAll(`.weekly-action-cell[data-pid="${CSS.escape(pid)}"]`));
+    const statuses = cells.map((cell) => cell.querySelector('.weekly-save-status')).filter(Boolean);
+    statuses.forEach((status) => { status.textContent = 'Guardando...'; });
+    if (saveTimers.has(pid)) clearTimeout(saveTimers.get(pid));
+    saveTimers.set(pid, setTimeout(async () => {
+      try {
+        const payload = collectPayloadForPid(pid);
+        const resp = await fetch(ACTION_URL_TEMPLATE.replace('__PID__', encodeURIComponent(pid)), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!resp.ok) throw new Error('save');
+        statuses.forEach((status) => { status.textContent = 'Guardado'; });
+      } catch (_) {
+        statuses.forEach((status) => { status.textContent = 'Error al guardar'; });
+      }
+    }, 350));
+  }
+
+  function bindTaskCell(cell) {
+    const pid = cell.dataset.pid || '';
+    if (!pid) return;
+    const list = cell.querySelector('.weekly-task-list');
+    const newInput = cell.querySelector('.weekly-task-new');
+    if (!list || !newInput) return;
+
+    function bindRow(row) {
+      const checkbox = row.querySelector('.weekly-task-check');
+      const textInput = row.querySelector('.weekly-task-text');
+      if (!checkbox || !textInput) return;
+      textInput.addEventListener('input', () => scheduleSaveForPid(pid));
+      textInput.addEventListener('blur', () => {
+        if (!(textInput.value || '').trim()) {
+          row.remove();
+        }
+        scheduleSaveForPid(pid);
+      });
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) {
+          row.remove();
+          scheduleSaveForPid(pid);
+        }
+      });
+    }
+
+    Array.from(list.querySelectorAll('.weekly-task-row')).forEach((row) => bindRow(row));
+    newInput.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter') return;
+      ev.preventDefault();
+      const text = (newInput.value || '').trim();
+      if (!text) return;
+      const row = document.createElement('div');
+      row.className = 'weekly-task-row';
+      row.dataset.createdAt = new Date().toISOString();
+      row.innerHTML = '<input type="checkbox" class="weekly-task-check"><input type="text" class="weekly-task-text">';
+      const textInput = row.querySelector('.weekly-task-text');
+      textInput.value = text;
+      list.appendChild(row);
+      newInput.value = '';
+      bindRow(row);
+      scheduleSaveForPid(pid);
+      textInput.focus();
+    });
+  }
+  table.querySelectorAll('.weekly-action-cell').forEach((cell) => bindTaskCell(cell));
+
+  const STORAGE_PREFIX = 'weekly-width:';
+  const hiddenCols = new Set(JSON.parse(localStorage.getItem(HIDDEN_COLS_KEY) || '[]'));
+  function renderHiddenColsButtons() {
+    hiddenColumnsWrap.innerHTML = '';
+    hiddenCols.forEach((colKey) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'weekly-hidden-plus';
+      btn.textContent = '+';
+      btn.title = `Mostrar columna ${colKey}`;
+      btn.addEventListener('click', () => { hiddenCols.delete(colKey); applyHiddenCols(); });
+      hiddenColumnsWrap.appendChild(btn);
+    });
+  }
+  function applyHiddenCols() {
+    const keys = Array.from(hiddenCols);
+    localStorage.setItem(HIDDEN_COLS_KEY, JSON.stringify(keys));
+    table.querySelectorAll('thead th').forEach((th, idx) => {
+      const col = table.querySelector(`colgroup col:nth-child(${idx + 1})`);
+      const key = th.dataset.colKey || (col && col.dataset.colKey) || String(idx + 1);
+      const hidden = hiddenCols.has(key);
+      th.style.display = hidden ? 'none' : '';
+      if (col) col.style.display = hidden ? 'none' : '';
+      table.querySelectorAll(`tbody tr td:nth-child(${idx + 1})`).forEach((td) => td.style.display = hidden ? 'none' : '');
+    });
+    renderHiddenColsButtons();
+  }
+
+  table.querySelectorAll('thead th').forEach((th, idx) => {
+    const col = table.querySelector(`colgroup col:nth-child(${idx + 1})`);
+    if (!col) return;
+    const key = col.dataset.colKey || String(idx);
+    const stored = localStorage.getItem(STORAGE_PREFIX + key);
+    const defaultWidth = Number(col.dataset.defaultWidth || 180);
+    const width = stored ? Number(stored) : defaultWidth;
+    if (Number.isFinite(width) && width > 60) col.style.width = `${width}px`;
+
+    th.addEventListener('click', (ev) => {
+      if (ev.target && ev.target.classList.contains('column-resizer')) return;
+      hiddenCols.add(key);
+      applyHiddenCols();
+    });
+
+    const handle = document.createElement('div');
+    handle.className = 'column-resizer';
+    th.appendChild(handle);
+    handle.addEventListener('mousedown', (ev) => {
+      ev.preventDefault();
+      const startX = ev.clientX;
+      const startWidth = col.getBoundingClientRect().width;
+      function onMove(moveEv) {
+        const next = Math.max(80, startWidth + (moveEv.clientX - startX));
+        col.style.width = `${next}px`;
+      }
+      function onUp() {
+        localStorage.setItem(STORAGE_PREFIX + key, String(Math.round(col.getBoundingClientRect().width)));
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+  applyHiddenCols();
+})();
+</script>
+{% endblock %}

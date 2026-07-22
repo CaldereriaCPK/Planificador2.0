@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    {% set planner_page_titles = {
+      'calendar_view': 'Calendario de planificación',
+      'complete': 'Completo',
+      'calendar_pedidos': 'Calendario pedidos',
+      'project_calendar_view': 'Calendario de proyectos',
+      'orden_carpetas_view': 'Orden carpetas',
+      'gantt_view': 'Gantt',
+      'gantt_orders_view': 'Gantt pedidos',
+      'note_list': 'Notas',
+      'observation_list': 'Observaciones',
+      'vacation_list': 'Vacaciones',
+      'resources': 'Recursos',
+      'taller_view': 'Taller',
+      'transportes_view': 'Transportes',
+      'analisis_view': 'Analisis',
+      'weekly_tracking_view': 'Seguimiento semanal',
+      'planning_snapshot_view': 'Estado datos',
+      'add_project': 'Añadir proyecto',
+      'project_list': 'Proyectos',
+      'hours': 'Horas',
+      'tracker': 'Registro',
+    } %}
+    {% set planner_tab_title = page_title|default(planner_page_titles.get(request.endpoint), true) %}
+    <title>Planificador{% if planner_tab_title %}: {{ planner_tab_title }}{% endif %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <script>
+      window.EFIMERO_TZ = 'Europe/Madrid';
+      const _madridDateFormatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: window.EFIMERO_TZ,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+      function madridDateISO(value) {
+        let date;
+        if (value instanceof Date) {
+          date = value;
+        } else if (typeof value === 'number') {
+          date = new Date(value);
+        } else if (value) {
+          date = new Date(value);
+        } else {
+          date = new Date();
+        }
+        if (Number.isNaN(date.valueOf())) {
+          return '';
+        }
+        return _madridDateFormatter.format(date);
+      }
+    </script>
+</head>
+{% set print_mode = request.args.get('modo') == 'print' %}
+{% set pdf_mode = request.args.get('pdf') == '1' %}
+{% set body_classes = [] %}
+{% if print_mode %}
+  {% set _ = body_classes.append('print-mode') %}
+  {% set _ = body_classes.append('modo-print') %}
+{% endif %}
+{% if pdf_mode %}
+  {% set _ = body_classes.append('pdf-export') %}
+{% endif %}
+<body{% if body_classes %} class="{{ ' '.join(body_classes) }}"{% endif %}>
+    {% if print_mode or pdf_mode %}
+    <style>
+      @page { size: A3 landscape; margin: 0; }
+      html, body { width: 100%; }
+      body.print-mode,
+      body.modo-print,
+      body.pdf-export {
+        overflow: visible;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        margin: 0;
+      }
+      body.print-mode *,
+      body.modo-print *,
+      body.pdf-export * {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      body.print-mode .schedule-wrapper,
+      body.print-mode .complete-projects,
+      body.print-mode .complete-conflicts,
+      body.print-mode .manual-dropzone,
+      body.print-mode .unplanned-list,
+      body.modo-print .schedule-wrapper,
+      body.modo-print .complete-projects,
+      body.modo-print .complete-conflicts,
+      body.modo-print .manual-dropzone,
+      body.modo-print .unplanned-list {
+        overflow: visible !important;
+        max-height: none !important;
+      }
+      body.modo-print nav,
+      body.modo-print hr,
+      body.modo-print .tabs,
+      body.modo-print .menu,
+      body.modo-print .toolbar,
+      body.modo-print .controls,
+      body.modo-print button,
+      body.modo-print form,
+      body.modo-print input,
+      body.modo-print select,
+      body.modo-print textarea {
+        display: none !important;
+      }
+      body.modo-print .tab-content {
+        display: none;
+        width: 100%;
+      }
+      body.pdf-export .tab-content {
+        display: block !important;
+      }
+
+      body.pdf-export .tab-content > .tab-pane {
+        display: block !important;
+        visibility: visible !important;
+        height: auto !important;
+        opacity: 1 !important;
+        width: 100% !important;
+      }
+    </style>
+    {% else %}
+    <style>
+      .efimero-nav { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+      .efimero-nav-item { display:inline-flex; align-items:center; gap:4px; border:1px solid #ddd; border-radius:6px; padding:4px 6px; background:#fff; }
+      .efimero-nav-item.dragging { opacity:.5; }
+      .efimero-nav-item.drag-over { outline:2px dashed #888; }
+      .efimero-nav-link { text-decoration:none; color:inherit; }
+      .efimero-nav-divider { width:100%; height:0; border-top:2px solid #ddd; margin:2px 0; }
+    </style>
+    <nav id="efimero-nav" class="efimero-nav">
+      <span class="efimero-nav-item" data-tab-key="complete" draggable="true"><a class="efimero-nav-link" href="{{ url_for('complete') }}">Completo</a></span>
+      <span class="efimero-nav-item" data-tab-key="calendar_pedidos" draggable="true"><a class="efimero-nav-link" href="{{ url_for('calendar_pedidos') }}">Calendario pedidos</a></span>
+      <span class="efimero-nav-item" data-tab-key="project_calendar" draggable="true"><a class="efimero-nav-link" href="{{ url_for('project_calendar_view') }}">Calendario de proyectos</a></span>
+      <span class="efimero-nav-item" data-tab-key="orden_carpetas" draggable="true"><a class="efimero-nav-link" href="{{ url_for('orden_carpetas_view') }}">Orden carpetas</a></span>
+      <span class="efimero-nav-item" data-tab-key="gantt" draggable="true"><a class="efimero-nav-link" href="{{ url_for('gantt_view') }}">Gantt</a></span>
+      <span class="efimero-nav-item" data-tab-key="gantt_orders" draggable="true"><a class="efimero-nav-link" href="{{ url_for('gantt_orders_view') }}">Gantt pedidos</a></span>
+      <span class="efimero-nav-divider" aria-hidden="true"></span>
+      <span class="efimero-nav-item" data-tab-key="notes" draggable="true"><a class="efimero-nav-link" href="{{ url_for('note_list') }}">Notas</a></span>
+      <span class="efimero-nav-item" data-tab-key="observaciones" draggable="true"><a class="efimero-nav-link" href="{{ url_for('observation_list') }}">Observaciones</a></span>
+      <span class="efimero-nav-item" data-tab-key="vacaciones" draggable="true"><a class="efimero-nav-link" href="{{ url_for('vacation_list') }}">Vacaciones</a></span>
+      <span class="efimero-nav-item" data-tab-key="recursos" draggable="true"><a class="efimero-nav-link" href="{{ url_for('resources') }}">Recursos</a></span>
+      <span class="efimero-nav-item" data-tab-key="taller" draggable="true"><a class="efimero-nav-link" href="{{ url_for('taller_view') }}">Taller</a></span>
+      <span class="efimero-nav-item" data-tab-key="transportes" draggable="true"><a class="efimero-nav-link" href="{{ url_for('transportes_view') }}">Transportes</a></span>
+      <span class="efimero-nav-item" data-tab-key="analisis" draggable="true"><a class="efimero-nav-link" href="{{ url_for('analisis_view') }}">Analisis</a></span>
+      <span class="efimero-nav-item" data-tab-key="weekly" draggable="true"><a class="efimero-nav-link" href="{{ url_for('weekly_tracking_view') }}">Seguimiento semanal</a></span>
+      <span class="efimero-nav-item" data-tab-key="estado" draggable="true"><a class="efimero-nav-link" href="{{ url_for('planning_snapshot_view') }}">Estado datos</a></span>
+      <span class="efimero-nav-item" data-tab-key="add_project" draggable="true"><a class="efimero-nav-link" href="{{ url_for('add_project') }}">Añadir proyecto</a></span>
+    </nav>
+    <hr/>
+    {% endif %}
+    {% block content %}{% endblock %}
+    <script>
+      const SCROLL_KEY_GENERIC = 'scroll:' + location.pathname;
+      const saved = sessionStorage.getItem(SCROLL_KEY_GENERIC);
+      if (saved !== null) {
+        window.scrollTo(0, parseFloat(saved));
+      }
+      let genericScrollStoreTimer = null;
+      function storeScrollNow() {
+        if (genericScrollStoreTimer) {
+          clearTimeout(genericScrollStoreTimer);
+          genericScrollStoreTimer = null;
+        }
+        sessionStorage.setItem(SCROLL_KEY_GENERIC, window.scrollY);
+      }
+      function storeScroll() {
+        if (genericScrollStoreTimer) return;
+        genericScrollStoreTimer = setTimeout(() => {
+          genericScrollStoreTimer = null;
+          sessionStorage.setItem(SCROLL_KEY_GENERIC, window.scrollY);
+        }, 150);
+      }
+      window.addEventListener('scroll', storeScroll, { passive: true });
+      window.addEventListener('beforeunload', storeScrollNow);
+      document.addEventListener('DOMContentLoaded', () => {
+        const nav = document.getElementById('efimero-nav');
+        const NAV_ORDER_KEY = 'efimero-nav-order-v1';
+        function saveNavOrder() {
+          if (!nav) return;
+          const order = Array.from(nav.querySelectorAll('.efimero-nav-item')).map((el) => el.dataset.tabKey || '').filter(Boolean);
+          localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(order));
+        }
+        function applySavedNavOrder() {
+          if (!nav) return;
+          let order = [];
+          try { order = JSON.parse(localStorage.getItem(NAV_ORDER_KEY) || '[]'); } catch (_err) { order = []; }
+          if (!Array.isArray(order) || !order.length) return;
+          const map = new Map(Array.from(nav.querySelectorAll('.efimero-nav-item')).map((el) => [el.dataset.tabKey, el]));
+          order.forEach((key) => {
+            const item = map.get(String(key));
+            if (item) nav.appendChild(item);
+          });
+        }
+        applySavedNavOrder();
+        if (nav) {
+          let dragging = null;
+          nav.querySelectorAll('.efimero-nav-item').forEach((item) => {
+            item.addEventListener('dragstart', () => { dragging = item; item.classList.add('dragging'); });
+            item.addEventListener('dragend', () => { item.classList.remove('dragging'); nav.querySelectorAll('.efimero-nav-item.drag-over').forEach((el) => el.classList.remove('drag-over')); saveNavOrder(); dragging = null; });
+            item.addEventListener('dragover', (ev) => {
+              ev.preventDefault();
+              if (!dragging || dragging === item) return;
+              nav.querySelectorAll('.efimero-nav-item.drag-over').forEach((el) => el.classList.remove('drag-over'));
+              item.classList.add('drag-over');
+              const rect = item.getBoundingClientRect();
+              const after = ev.clientX > rect.left + rect.width / 2;
+              if (after) nav.insertBefore(dragging, item.nextSibling);
+              else nav.insertBefore(dragging, item);
+            });
+            item.addEventListener('drop', (ev) => { ev.preventDefault(); saveNavOrder(); });
+          });
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('modo') === 'print') {
+          document.body.classList.add('modo-print');
+          const tab = params.get('tab');
+          document.querySelectorAll('.tabs, .menu, .toolbar, nav, hr').forEach((el) => {
+            el.style.display = 'none';
+          });
+          document.querySelectorAll('.tab-content').forEach((el) => {
+            el.style.display = 'none';
+          });
+          if (tab) {
+            const active = document.getElementById(`tab-${tab}`);
+            if (active) {
+              active.style.display = 'block';
+            }
+          }
+          if (window.initTab && typeof window.initTab === 'function') {
+            window.initTab(tab);
+          }
+        }
+      });
+    </script>
+</body>
+</html>

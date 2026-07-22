@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Añadir proyecto</h2>
+<p class="notice error">NOTA: Es necesario darle horas a alguna de las fases al generar un proyecto desde este formulario.</p>
+<form method="post" enctype="multipart/form-data">
+{% include '_project_form_fields.html' %}
+</form>
+{% endblock %}

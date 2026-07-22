@@ -1,0 +1,237 @@
+{% extends 'base.html' %}
+{% block content %}
+<div id="tab-recursos" class="tab-content">
+<h2>Recursos</h2>
+<form method="post">
+  <table class="resource-table">
+    <thead>
+      <tr>
+        <th class="resource-order-header">Orden</th>
+        <th>Recurso</th>
+        <th>Visible</th>
+        <th>Jornada</th>
+        <th>Eliminar</th>
+      </tr>
+    </thead>
+    <tbody id="resource-list">
+      {% for w in workers %}
+      {% set limit = worker_limits.get(w, 'inf') %}
+      <tr data-worker="{{ w }}" data-original-worker="{{ w }}">
+        <td class="resource-move">
+          <button type="button" class="move-btn" data-move="up" aria-label="Mover {{ w }} hacia arriba">▲</button>
+          <button type="button" class="move-btn" data-move="down" aria-label="Mover {{ w }} hacia abajo">▼</button>
+          <input type="hidden" name="order" value="{{ w }}">
+        </td>
+        <td class="resource-name">
+          <input type="text" name="worker_name__{{ loop.index0 }}" value="{{ w }}" aria-label="Renombrar {{ w }}">
+          <input type="hidden" name="worker_original__{{ loop.index0 }}" value="{{ w }}">
+        </td>
+        <td class="resource-visible">
+          <input type="checkbox" name="worker" value="{{ w }}" data-original-visible="{{ 'true' if w not in inactive else 'false' }}" {% if w not in inactive %}checked{% endif %}>
+          <input type="hidden" name="visibility_effective__{{ loop.index0 }}" value="{{ today }}">
+        </td>
+        <td class="resource-hours">
+          <select name="hours__{{ loop.index0 }}" data-original="{{ 'inf' if limit == 'inf' else limit }}">
+            <option value="inf" {% if limit == 'inf' %}selected{% endif %}>Sin límite</option>
+            {% for option in hour_options %}
+            <option value="{{ option }}" {% if limit != 'inf' and limit == option %}selected{% endif %}>{{ option }} h</option>
+            {% endfor %}
+          </select>
+          <input type="hidden" name="hours_worker__{{ loop.index0 }}" value="{{ w }}">
+          <input type="hidden" name="hours_changed__{{ loop.index0 }}" value="0">
+        </td>
+        <td class="resource-delete">
+          <button type="submit" name="delete_worker" value="{{ w }}" onclick="return confirm('¿Eliminar el recurso {{ w }}? Las fases planificadas en este recurso pasarán a ARRASTRAR AQUÍ.');">Eliminar</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="add-worker">
+    <input type="text" name="new_worker" placeholder="Nombre del recurso">
+    <button type="submit" name="add_worker">Añadir recurso</button>
+  </div>
+  <button type="submit">Guardar</button>
+</form>
+<div id="resource-visibility-modal" class="conflict-modal" aria-hidden="true">
+  <div class="conflict-content resource-visibility-content">
+    <h3 id="resource-visibility-title">Desactivar recurso</h3>
+    <label>Fecha efectiva
+      <input type="date" id="resource-visibility-date">
+    </label>
+    <div class="resource-visibility-actions">
+      <button type="button" id="resource-visibility-confirm">Aceptar</button>
+      <button type="button" id="resource-visibility-cancel">Cancelar</button>
+    </div>
+  </div>
+</div>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const list = document.getElementById('resource-list');
+    const today = {{ today|tojson }};
+    const visibilityModal = document.getElementById('resource-visibility-modal');
+    const visibilityTitle = document.getElementById('resource-visibility-title');
+    const visibilityDate = document.getElementById('resource-visibility-date');
+    const visibilityConfirm = document.getElementById('resource-visibility-confirm');
+    const visibilityCancel = document.getElementById('resource-visibility-cancel');
+    let pendingVisibilityChange = null;
+    if (!list) {
+      return;
+    }
+    function closeVisibilityModal({ restore } = {}) {
+      if (restore && pendingVisibilityChange && pendingVisibilityChange.checkbox) {
+        pendingVisibilityChange.checkbox.checked = true;
+      }
+      pendingVisibilityChange = null;
+      if (visibilityModal) {
+        visibilityModal.classList.remove('open');
+        visibilityModal.setAttribute('aria-hidden', 'true');
+      }
+    }
+
+    function openVisibilityModal(checkbox, effectiveField, name) {
+      pendingVisibilityChange = { checkbox, effectiveField };
+      if (visibilityTitle) {
+        visibilityTitle.textContent = `Desactivar recurso ${name || ''}`.trim();
+      }
+      if (visibilityDate) {
+        visibilityDate.value = today;
+      }
+      if (visibilityModal) {
+        visibilityModal.classList.add('open');
+        visibilityModal.setAttribute('aria-hidden', 'false');
+      }
+      if (visibilityDate) {
+        visibilityDate.focus();
+        if (typeof visibilityDate.showPicker === 'function') {
+          try { visibilityDate.showPicker(); } catch (err) { /* El navegador puede bloquear showPicker fuera del gesto de usuario. */ }
+        }
+      }
+    }
+
+    if (visibilityConfirm) {
+      visibilityConfirm.addEventListener('click', () => {
+        if (!pendingVisibilityChange || !visibilityDate) return;
+        const value = visibilityDate.value || today;
+        const parsedDate = new Date(`${value}T00:00:00Z`);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== value) {
+          alert('Introduce una fecha válida con formato aaaa-mm-dd.');
+          return;
+        }
+        if (pendingVisibilityChange.effectiveField) {
+          pendingVisibilityChange.effectiveField.value = value;
+        }
+        closeVisibilityModal();
+      });
+    }
+    if (visibilityCancel) {
+      visibilityCancel.addEventListener('click', () => closeVisibilityModal({ restore: true }));
+    }
+    if (visibilityModal) {
+      visibilityModal.addEventListener('click', event => {
+        if (event.target === visibilityModal) {
+          closeVisibilityModal({ restore: true });
+        }
+      });
+    }
+
+    list.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-move]');
+      if (!button) {
+        return;
+      }
+      event.preventDefault();
+      const row = button.closest('tr[data-worker]');
+      if (!row) {
+        return;
+      }
+      if (button.dataset.move === 'up') {
+        const previous = row.previousElementSibling;
+        if (previous) {
+          list.insertBefore(row, previous);
+        }
+      } else if (button.dataset.move === 'down') {
+        const next = row.nextElementSibling;
+        if (next) {
+          list.insertBefore(row, next.nextElementSibling);
+        }
+      }
+    });
+    list.addEventListener('change', (event) => {
+      const checkbox = event.target.closest('input[name="worker"][type="checkbox"]');
+      if (checkbox) {
+        const row = checkbox.closest('tr[data-worker]');
+        const name = row ? (row.dataset.worker || checkbox.value || '').trim() : (checkbox.value || '').trim();
+        const originalField = row ? row.querySelector('input[name^="worker_original__"]') : null;
+        const indexMatch = originalField && originalField.name
+          ? originalField.name.match(/^worker_original__(\d+)$/)
+          : null;
+        const effectiveField = indexMatch ? row.querySelector(`input[name="visibility_effective__${indexMatch[1]}"]`) : null;
+        if (!checkbox.checked) {
+          openVisibilityModal(checkbox, effectiveField, name);
+        } else if (effectiveField) {
+          effectiveField.value = today;
+        }
+        return;
+      }
+
+      const select = event.target.closest('select[name^="hours__"]');
+      if (!select) {
+        return;
+      }
+      const match = select.name.match(/^hours__(\d+)$/);
+      if (!match) {
+        return;
+      }
+      const index = match[1];
+      const row = select.closest('tr[data-worker]');
+      if (!row) {
+        return;
+      }
+      const changed = row.querySelector(`input[name="hours_changed__${index}"]`);
+      if (!changed) {
+        return;
+      }
+      const current = select.value || 'inf';
+      const original = select.dataset.original || 'inf';
+      changed.value = current === original ? '0' : '1';
+    });
+    list.addEventListener('input', (event) => {
+      const input = event.target.closest('input[name^="worker_name__"]');
+      if (!input) {
+        return;
+      }
+      const row = input.closest('tr[data-worker]');
+      if (!row) {
+        return;
+      }
+      const match = input.name.match(/^worker_name__(\d+)$/);
+      if (!match) {
+        return;
+      }
+      const index = match[1];
+      const originalField = row.querySelector(`input[name="worker_original__${index}"]`);
+      const original = originalField ? originalField.value : '';
+      const newName = input.value.trim() || original;
+      row.dataset.worker = newName;
+      const orderField = row.querySelector('input[name="order"]');
+      if (orderField) {
+        orderField.value = newName;
+      }
+      const checkbox = row.querySelector('input[name="worker"][type="checkbox"]');
+      if (checkbox) {
+        checkbox.value = newName;
+      }
+      const hoursWorker = row.querySelector(`input[name="hours_worker__${index}"]`);
+      if (hoursWorker) {
+        hoursWorker.value = newName;
+      }
+      const deleteButton = row.querySelector('button[name="delete_worker"]');
+      if (deleteButton) {
+        deleteButton.value = newName;
+      }
+    });
+  });
+</script>
+</div>
+{% endblock %}

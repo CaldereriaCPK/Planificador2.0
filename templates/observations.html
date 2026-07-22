@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block content %}
+<div id="tab-observaciones" class="tab-content">
+<h2>Observaciones</h2>
+<table>
+  <tr><th>Proyecto</th><th>Cliente</th><th>Observaciones</th><th></th></tr>
+  {% for p in projects %}
+  <tr data-pid="{{ p.id }}">
+    <td>{{ p.name }}</td>
+    <td>{{ p.client }}</td>
+    <td><textarea class="obs-text" rows="3" cols="40">{{ p.observations }}</textarea></td>
+    <td>
+      <button class="save-btn">Guardar</button>
+      <button class="delete-btn">Borrar</button>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<script>
+document.querySelectorAll('.save-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const row = btn.closest('tr');
+    const pid = row.dataset.pid;
+    const txt = row.querySelector('.obs-text').value;
+    await fetch(`/update_observations/${encodeURIComponent(pid)}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({observations: txt})
+    });
+    if (!txt.trim()) row.remove();
+  });
+});
+document.querySelectorAll('.delete-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const row = btn.closest('tr');
+    const pid = row.dataset.pid;
+    await fetch(`/update_observations/${encodeURIComponent(pid)}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({observations: ''})
+    });
+    row.remove();
+  });
+});
+</script>
+</div>
+{% endblock %}

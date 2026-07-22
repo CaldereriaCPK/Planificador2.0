@@ -1,0 +1,257 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div id="tab-analisis" class="tab-content">
+  <h2>Analisis</h2>
+  <div class="analysis-table-wrap">
+    <table class="analysis-table" id="analysis-table">
+      <thead>
+        <tr>
+          <th data-type="text">OF</th>
+          <th data-type="text">Cliente</th>
+          <th data-type="date">Fecha pedido</th>
+          <th data-type="date">Fecha cliente</th>
+          <th data-type="date">Fecha primer pedido</th>
+          <th data-type="date">Fecha último pedido</th>
+          <th data-type="date">LANZAMIENTO</th>
+          <th data-type="date">MATERIAL</th>
+          <th data-type="date">CALDERERIA</th>
+          <th data-type="date">PINTURA</th>
+          <th data-type="date">MECANIZADO</th>
+          <th data-type="date">TRATAMIENTO</th>
+          <th data-type="date">Fecha inicio planificado</th>
+          <th data-type="date">Fecha fin planificado</th>
+          <th data-type="number">Días CALDERERIA - Fecha inicio planificado</th>
+          <th data-type="number">Días LANZAMIENTO - Fecha primer pedido</th>
+          <th data-type="number">Días MATERIAL - Fecha primer pedido</th>
+          <th data-type="number">Días Fecha primer pedido - Fecha inicio planificado</th>
+          <th data-type="number">Días Primer pedido</th>
+          <th data-type="number">Días último pedido</th>
+          <th data-type="number">Días último pedido - fecha cliente</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% set dias_primer = row.dias_primer_pedido %}
+        <tr>
+          <td>{{ row.of }}</td>
+          <td>{{ row.client }}</td>
+          <td>{{ row.fecha_pedido }}</td>
+          <td>{{ row.fecha_cliente }}</td>
+          <td>{{ row.fecha_primer_pedido }}</td>
+          <td>{{ row.fecha_ultimo_pedido }}</td>
+          <td>{{ row.lanzamiento }}</td>
+          <td>{{ row.material }}</td>
+          <td>{{ row.caldereria }}</td>
+          <td>{{ row.pintura }}</td>
+          <td>{{ row.mecanizado }}</td>
+          <td>{{ row.tratamiento }}</td>
+          <td>{{ row.fecha_inicio_planificado }}</td>
+          <td>{{ row.fecha_fin_planificado }}</td>
+          <td data-sort="{{ row.dias_caldereria_inicio_sort }}" data-highlight-cols="8,9" class="analysis-days-cell {{ row.dias_caldereria_inicio_class }}">{{ row.dias_caldereria_inicio_display }}</td>
+          <td data-sort="{{ row.dias_lanzamiento_primer_sort }}" data-highlight-cols="6,4" class="analysis-days-cell {{ row.dias_lanzamiento_primer_class }}">{{ row.dias_lanzamiento_primer_display }}</td>
+          <td data-sort="{{ row.dias_material_primer_sort }}" data-highlight-cols="7,4" class="analysis-days-cell {{ row.dias_material_primer_class }}">{{ row.dias_material_primer_display }}</td>
+          <td data-sort="{{ row.dias_primer_inicio_sort }}" data-highlight-cols="4,9" class="analysis-days-cell {{ row.dias_primer_inicio_class }}">{{ row.dias_primer_inicio_display }}</td>
+          <td data-highlight-cols="2,4" class="analysis-days-cell{% if dias_primer != '' and dias_primer|int > 5 %} analysis-value-alert{% endif %}">{{ row.dias_primer_pedido }}</td>
+          <td data-highlight-cols="2,5" class="analysis-days-cell">{{ row.dias_ultimo_pedido }}</td>
+          <td data-highlight-cols="5,3" class="analysis-days-cell">{{ row.dias_ultimo_fecha_cliente }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="21" class="analysis-empty">No hay proyectos con Fecha pedido de 2026.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+(() => {
+  const table = document.getElementById('analysis-table');
+  if (!table) return;
+  const headers = Array.from(table.querySelectorAll('thead th'));
+  const tbody = table.tBodies[0];
+  if (!tbody) return;
+
+  let sortState = { index: -1, dir: 'desc' };
+
+  const COLUMN_WIDTHS_STORAGE_KEY = 'analysis_table_column_widths_v1';
+
+  function applyWidthToColumn(index, width) {
+    if (!Number.isFinite(width) || width <= 0) return;
+    const value = `${width}px`;
+    const header = headers[index];
+    if (header) {
+      header.style.width = value;
+      header.style.minWidth = value;
+    }
+    Array.from(tbody.rows).forEach((row) => {
+      const cell = row.children[index];
+      if (!cell) return;
+      cell.style.width = value;
+      cell.style.minWidth = value;
+    });
+  }
+
+  function loadColumnWidths() {
+    try {
+      const raw = localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY);
+      if (!raw) return;
+      const widths = JSON.parse(raw);
+      if (!Array.isArray(widths)) return;
+      widths.forEach((width, index) => {
+        if (Number.isFinite(width) && width > 0) applyWidthToColumn(index, width);
+      });
+    } catch (_err) {
+      // noop
+    }
+  }
+
+  function saveColumnWidths() {
+    try {
+      const widths = headers.map((th) => {
+        const parsed = Number.parseFloat(th.style.width);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : th.offsetWidth;
+      });
+      localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(widths));
+    } catch (_err) {
+      // noop
+    }
+  }
+
+  function parseDate(text) {
+    const value = (text || '').trim();
+    if (!value) return null;
+    const m = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return null;
+    const day = Number(m[1]);
+    const month = Number(m[2]) - 1;
+    const year = Number(m[3]);
+    const d = new Date(year, month, day);
+    return Number.isNaN(d.valueOf()) ? null : d;
+  }
+
+  function cmp(a, b, type, dir) {
+    const aText = typeof a === 'string' ? a : '';
+    const bText = typeof b === 'string' ? b : '';
+    let va = aText;
+    let vb = bText;
+    if (type === 'number') {
+      va = Number(`${aText}`.trim());
+      vb = Number(`${bText}`.trim());
+      if (Number.isNaN(va)) va = Number.NEGATIVE_INFINITY;
+      if (Number.isNaN(vb)) vb = Number.NEGATIVE_INFINITY;
+    } else if (type === 'date') {
+      va = parseDate(a);
+      vb = parseDate(b);
+      va = va ? va.getTime() : Number.NEGATIVE_INFINITY;
+      vb = vb ? vb.getTime() : Number.NEGATIVE_INFINITY;
+    } else {
+      va = `${a}`.toLowerCase();
+      vb = `${b}`.toLowerCase();
+    }
+
+    if (va < vb) return dir === 'asc' ? -1 : 1;
+    if (va > vb) return dir === 'asc' ? 1 : -1;
+    return 0;
+  }
+
+  function sortBy(index) {
+    const th = headers[index];
+    const type = th.dataset.type || 'text';
+    const dir = (sortState.index === index && sortState.dir === 'desc') ? 'asc' : 'desc';
+    sortState = { index, dir };
+
+    headers.forEach(h => h.classList.remove('sorted-asc', 'sorted-desc'));
+    th.classList.add(dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+
+    const rows = Array.from(tbody.querySelectorAll('tr'))
+      .filter(row => !row.querySelector('.analysis-empty'));
+    rows.sort((ra, rb) => {
+      const aCell = ra.children[index];
+      const bCell = rb.children[index];
+      const a = aCell ? (aCell.dataset.sort ?? aCell.textContent) : '';
+      const b = bCell ? (bCell.dataset.sort ?? bCell.textContent) : '';
+      return cmp(a, b, type, dir);
+    });
+    rows.forEach(r => tbody.appendChild(r));
+  }
+
+
+
+  function clearDateHighlights() {
+    tbody.querySelectorAll('.analysis-date-source-highlight, .analysis-days-cell-active').forEach((cell) => {
+      cell.classList.remove('analysis-date-source-highlight', 'analysis-days-cell-active');
+    });
+  }
+
+  tbody.addEventListener('click', (event) => {
+    const dayCell = event.target.closest('td.analysis-days-cell');
+    if (!dayCell || !tbody.contains(dayCell)) {
+      clearDateHighlights();
+      return;
+    }
+
+    const row = dayCell.parentElement;
+    if (!row) return;
+
+    const valueText = (dayCell.textContent || '').trim();
+    if (!valueText) {
+      clearDateHighlights();
+      return;
+    }
+
+    const wasActive = dayCell.classList.contains('analysis-days-cell-active');
+    clearDateHighlights();
+    if (wasActive) return;
+
+    dayCell.classList.add('analysis-days-cell-active');
+    const cols = String(dayCell.dataset.highlightCols || '')
+      .split(',')
+      .map((part) => Number(part.trim()))
+      .filter((index) => Number.isInteger(index) && index >= 0);
+
+    cols.forEach((index) => {
+      const sourceCell = row.children[index];
+      if (sourceCell) sourceCell.classList.add('analysis-date-source-highlight');
+    });
+  });
+
+  loadColumnWidths();
+
+  headers.forEach((th, index) => {
+    th.classList.add('analysis-sortable');
+    th.addEventListener('click', () => sortBy(index));
+
+    const handle = document.createElement('span');
+    handle.className = 'analysis-col-resize-handle';
+    th.appendChild(handle);
+
+    let startX = 0;
+    let startWidth = 0;
+
+    handle.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startX = event.clientX;
+      startWidth = th.offsetWidth;
+
+      const onMove = (moveEvent) => {
+        const width = Math.max(1, startWidth + (moveEvent.clientX - startX));
+        applyWidthToColumn(index, width);
+      };
+
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        saveColumnWidths();
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+})();
+</script>
+{% endblock %}

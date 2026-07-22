@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Horas</h2>
+<table class="hours-table">
+    <thead>
+    <tr>
+        <th>Proyecto</th>
+        <th>Fase</th>
+        <th>Fecha inicio</th>
+        <th>Hora inicio</th>
+        <th>Fecha fin</th>
+        <th>Hora fin</th>
+    </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+        <td>{{ r.project }}</td>
+        <td>{{ r.phase }}</td>
+        <td>{{ r.start_time.split('T')[0] }}</td>
+        <td>{{ r.start_time.split('T')[1][:5] }}</td>
+        <td>{{ r.end_time.split('T')[0] }}</td>
+        <td>{{ r.end_time.split('T')[1][:5] }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

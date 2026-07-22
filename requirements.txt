@@ -1,0 +1,3 @@
+Flask>=2.2
+pdfkit>=1.0.0
+pypdf>=4.2.0

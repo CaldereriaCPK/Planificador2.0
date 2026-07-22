@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Hitos</h2>
+<table>
+    <tr><th>Descripción</th><th>Fecha</th><th></th></tr>
+    {% for m in milestones %}
+    <tr>
+        <td>{{ m.description }}</td>
+        <td>{{ m.date }}</td>
+        <td>
+            <form method="post" action="{{ url_for('delete_milestone', mid=m.id) }}">
+                <input type="hidden" name="next" value="{{ url_for('milestone_list') }}">
+                <button class="delete-btn" type="submit">&#10060;</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+{% endblock %}

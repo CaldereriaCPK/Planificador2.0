@@ -1,0 +1,127 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div id="tab-taller" class="tab-content">
+  <h2>Taller</h2>
+  <div class="taller-wrapper">
+    <table class="taller-table">
+      <tbody>
+        <tr>
+          {% for column in columns_first %}
+          <th class="taller-header">{{ column.worker }}</th>
+          {% endfor %}
+        </tr>
+        <tr>
+          {% for column in columns_first %}
+          <td class="taller-column-cell">
+            {% if column.tasks %}
+              {% for t in column.tasks %}
+                {% set project_info = project_data.get(t.pid|string) or project_data.get(t.pid) %}
+                {% set attachments = [] %}
+                {% if project_info %}
+                  {% if project_info.image %}
+                    {% set attachments = attachments + [url_for('static', filename=project_info.image)] %}
+                  {% endif %}
+                  {% if project_info.kanban_attachments %}
+                    {% for att in project_info.kanban_attachments %}
+                      {% set att_url = att.url if att.url is defined else att.get('url') %}
+                      {% if att_url %}
+                        {% set attachments = attachments + [att_url] %}
+                      {% endif %}
+                    {% endfor %}
+                  {% endif %}
+                {% endif %}
+                <div class="task taller-task{% if t.frozen %} frozen{% endif %}{% if t.archived_shadow %} archived-shadow{% endif %}" style="border-color: {{ t.color }};{% if t.frozen_background %} --frozen-background: {{ t.frozen_background }};{% endif %}">
+                  <div class="task-main">
+                    <span class="task-client">{{ t.client|truncate(18, True) }}</span>
+                    <span class="task-project">{{ t.project }}</span>
+                    {% if t.blocked %}<span class="blocked-sign">&#128683;</span>{% endif %}
+                  </div>
+                  <span class="task-phase">
+                    {{ t.phase }}{% if t.part is not none %} ({{ t.part|int + 1 }}){% endif %}
+                  </span>
+                  {% if attachments and not t.archived_shadow %}
+                  <div class="taller-attachments">
+                    {% for attachment in attachments %}
+                    <img src="{{ attachment }}" alt="Adjunto de {{ t.project }}">
+                    {% endfor %}
+                  </div>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            {% else %}
+            <div class="taller-empty">Sin trabajo planificado</div>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+      </tbody>
+    </table>
+    {% if columns_second %}
+    <table class="taller-table taller-table-secondary">
+      <tbody>
+        <tr>
+          {% for column in columns_second %}
+          <th class="taller-header">{{ column.worker }}</th>
+          {% endfor %}
+        </tr>
+        <tr>
+          {% for column in columns_second %}
+          <td class="taller-column-cell">
+            {% if column.tasks %}
+              {% for t in column.tasks %}
+                {% set project_info = project_data.get(t.pid|string) or project_data.get(t.pid) %}
+                {% set attachments = [] %}
+                {% if project_info %}
+                  {% if project_info.image %}
+                    {% set attachments = attachments + [url_for('static', filename=project_info.image)] %}
+                  {% endif %}
+                  {% if project_info.kanban_attachments %}
+                    {% for att in project_info.kanban_attachments %}
+                      {% set att_url = att.url if att.url is defined else att.get('url') %}
+                      {% if att_url %}
+                        {% set attachments = attachments + [att_url] %}
+                      {% endif %}
+                    {% endfor %}
+                  {% endif %}
+                {% endif %}
+                <div class="task taller-task{% if t.frozen %} frozen{% endif %}{% if t.archived_shadow %} archived-shadow{% endif %}" style="border-color: {{ t.color }};{% if t.frozen_background %} --frozen-background: {{ t.frozen_background }};{% endif %}">
+                  <div class="task-main">
+                    <span class="task-client">{{ t.client|truncate(18, True) }}</span>
+                    <span class="task-project">{{ t.project }}</span>
+                    {% if t.blocked %}<span class="blocked-sign">&#128683;</span>{% endif %}
+                  </div>
+                  <span class="task-phase">
+                    {{ t.phase }}{% if t.part is not none %} ({{ t.part|int + 1 }}){% endif %}
+                  </span>
+                  {% if attachments and not t.archived_shadow %}
+                  <div class="taller-attachments">
+                    {% for attachment in attachments %}
+                    <img src="{{ attachment }}" alt="Adjunto de {{ t.project }}">
+                    {% endfor %}
+                  </div>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            {% else %}
+            <div class="taller-empty">Sin trabajo planificado</div>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>
+<script>
+  const TALLER_REFRESH_KEY = 'taller:refresh';
+  let lastRefresh = localStorage.getItem(TALLER_REFRESH_KEY);
+  window.addEventListener('storage', (event) => {
+    if (event.key === TALLER_REFRESH_KEY && event.newValue && event.newValue !== lastRefresh) {
+      lastRefresh = event.newValue;
+      window.location.reload();
+    }
+  });
+</script>
+{% endblock %}
