@@ -11042,12 +11042,44 @@ def move_phase():
 
     blockers = material_blockers_for_project(projects, pid, new_day)
 
+    def _actual_position(affected_pid, affected_phase, affected_part):
+        candidates = {affected_pid, str(affected_pid)}
+        for candidate in candidates:
+            for affected_worker, affected_day, found_phase, _, found_part in mapping.get(candidate, []):
+                if found_phase == affected_phase and (
+                    affected_part is None or found_part == affected_part
+                ):
+                    return affected_day, affected_worker
+        return None, None
+
+    affected_moves = []
+    seen_affected = set()
+    for event in tracker_events:
+        event_part = event.get('part')
+        key = (str(event.get('pid')), event.get('phase'), event_part)
+        if key in seen_affected:
+            continue
+        seen_affected.add(key)
+        event_day, event_worker = _actual_position(
+            event.get('pid'), event.get('phase'), event_part
+        )
+        affected_moves.append({
+            'pid': event.get('pid'),
+            'phase': event.get('phase'),
+            'part': event_part,
+            'actual_day': event_day,
+            'actual_worker': event_worker,
+        })
+
     resp = {
         'date': new_day,
+        'actual_day': actual_day,
+        'actual_worker': actual_worker,
         'pid': pid,
         'phase': phase,
         'part': part,
         'material_blockers': blockers,
+        'affected': affected_moves,
     }
     if warn and not ack_warning:
         resp['warning'] = warn

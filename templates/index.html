@@ -1529,12 +1529,96 @@
   ensurePedidosLinks();
 
   let pendingBlock = null;
-  function afterMove(data, originalDate) {
+  function findMoveTask(data) {
+    const part = normalizePartValue(data.part);
+    return Array.from(document.querySelectorAll('.task[data-pid][data-phase]')).find(el =>
+      el.dataset.pid === String(data.pid)
+      && el.dataset.phase === data.phase
+      && normalizePartValue(el.dataset.part) === part
+    ) || null;
+  }
+
+  function _moveTarget(worker, dateText) {
+    if ((worker || '').trim() === 'Sin planificar') {
+      return Array.from(document.querySelectorAll('.unplanned-list[data-worker="Sin planificar"]'))
+        .find(el => el.style.display !== 'none') || null;
+    }
+    return findWorkerDayCell((worker || '').trim(), dateText);
+  }
+
+  // This deliberately contains only DOM work, so it can run before fetch starts.
+  function _applyMoveWithoutReload(task, dateText, targetWorker, beforeNode = null) {
+    const target = _moveTarget(targetWorker, dateText);
+    if (!task || !target) return false;
+    task.dataset.day = dateText || '';
+    if (beforeNode && beforeNode.parentNode === target) target.insertBefore(task, beforeNode);
+    else target.appendChild(task);
+    return true;
+  }
+
+  function beginOptimisticMove(moveData) {
+    const task = draggedTaskElement || findMoveTask(moveData);
+    if (!task || task.dataset.movePending === 'true') return null;
+    const parent = task.parentNode;
+    const row = task.closest('tr[data-worker]');
+    const snapshot = {
+      task,
+      parent,
+      nextSibling: task.nextSibling,
+      day: task.dataset.day,
+      className: task.className,
+      worker: row ? row.dataset.worker : 'Sin planificar',
+      draggable: task.getAttribute('draggable'),
+    };
+    if (!_applyMoveWithoutReload(task, moveData.date, moveData.worker)) return null;
+    task.classList.add('saving');
+    task.dataset.movePending = 'true';
+    task.setAttribute('draggable', 'false');
+    recomputeWorkerDayCell(snapshot.worker, snapshot.day);
+    recomputeWorkerDayCell(moveData.worker, moveData.date);
+    return snapshot;
+  }
+
+  function restoreOptimisticMove(snapshot) {
+    if (!snapshot || !snapshot.task || !snapshot.parent) return;
+    if (snapshot.nextSibling && snapshot.nextSibling.parentNode === snapshot.parent) {
+      snapshot.parent.insertBefore(snapshot.task, snapshot.nextSibling);
+    } else {
+      snapshot.parent.appendChild(snapshot.task);
+    }
+    snapshot.task.dataset.day = snapshot.day || '';
+    // Restore the exact pre-request visual and drag state.
+    snapshot.task.className = snapshot.className;
+    if (snapshot.draggable === null) snapshot.task.removeAttribute('draggable');
+    else snapshot.task.setAttribute('draggable', snapshot.draggable);
+    delete snapshot.task.dataset.movePending;
+    recomputeWorkerDayCell(snapshot.worker, snapshot.day);
+  }
+
+  function confirmOptimisticMove(snapshot, data) {
+    if (!snapshot) return false;
+    const actualDay = data.actual_day || data.date;
+    const actualWorker = data.actual_worker || data.worker;
+    _applyMoveWithoutReload(snapshot.task, actualDay, actualWorker);
+    snapshot.task.classList.remove('saving');
+    delete snapshot.task.dataset.movePending;
+    if (snapshot.draggable === null) snapshot.task.removeAttribute('draggable');
+    else snapshot.task.setAttribute('draggable', snapshot.draggable);
+    (data.affected || []).forEach(item => {
+      const affectedTask = findMoveTask(item);
+      if (affectedTask) _applyMoveWithoutReload(affectedTask, item.actual_day || item.date, item.actual_worker || item.worker);
+    });
+    recomputeWorkerDayCell(snapshot.worker, snapshot.day);
+    recomputeWorkerDayCell(actualWorker, actualDay);
+    return true;
+  }
+
+  function afterMove(data, originalDate, withoutReload = false) {
     localStorage.setItem(LAST_KEY, JSON.stringify({pid: data.pid, phase: data.phase, part: data.part, date: data.date}));
     localStorage.setItem(TALLER_REFRESH_KEY, String(Date.now()));
     if (data.date !== originalDate) localStorage.setItem(SCROLL_KEY2, data.date);
     const finalize = () => {
-      location.reload();
+      if (!withoutReload) location.reload();
     };
     if (Object.prototype.hasOwnProperty.call(data, 'material_blockers')) {
       const directBlockers = Array.isArray(data.material_blockers)
@@ -3236,7 +3320,8 @@ let draggedTaskElement = null;
   }
   function doMove(moveData, mode, beforeMaterial) {
     moveData.mode = mode;
-    fetch(MOVE_URL, {
+    const optimisticSnapshot = beginOptimisticMove(moveData);
+    const request = fetch(MOVE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
@@ -3245,6 +3330,7 @@ let draggedTaskElement = null;
     .then(resp => resp.json().then(j => ({ok: resp.ok, data: j})))
     .then(({ok, data}) => {
       if (!ok) {
+        restoreOptimisticMove(optimisticSnapshot);
         if (data.blocked) {
           pendingBlock = { moveData, mode, beforeMaterial };
           blockText.textContent = `Hay una fase bloqueada (${data.blocked.name} - ${data.blocked.phase}). ¿Quieres descongelar la fase y que se aplace con el resto o que se atrase lo demás saltándose esa fase?`;
@@ -3254,8 +3340,14 @@ let draggedTaskElement = null;
         alert(data.error || 'Error');
         return;
       }
-      afterMove(data, moveData.date);
+      confirmOptimisticMove(optimisticSnapshot, data);
+      afterMove(data, moveData.date, Boolean(optimisticSnapshot));
+    })
+    .catch(err => {
+      restoreOptimisticMove(optimisticSnapshot);
+      alert((err && err.message) || 'Error');
     });
+    return request;
   }
   if (blockUnfreeze) {
     blockUnfreeze.addEventListener('click', () => {
