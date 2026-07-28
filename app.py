@@ -87,6 +87,107 @@ PHASE_ORDER = _schedule_mod.PHASE_ORDER
 WORKERS = _schedule_mod.WORKERS
 IGOR_END = _schedule_mod.IGOR_END
 compute_schedule_map = _schedule_mod.compute_schedule_map
+
+# The calendar is expensive to build.  Keep the two views used by drag/drop
+# alongside the data revision they describe: phase slices and occupied cells.
+_PLANNING_CALENDAR_CACHE_VERSION = 0
+_PLANNING_CALENDAR_INDEX_VERSION = -1
+_PLANNING_PHASE_INDEX = {}
+_PLANNING_CELL_INDEX = {}
+_raw_save_projects = save_projects
+
+
+def invalidate_planning_calendar_cache(*, keep_indexes=False):
+    """Advance the planning-data revision, optionally retaining patched indexes."""
+    global _PLANNING_CALENDAR_CACHE_VERSION, _PLANNING_CALENDAR_INDEX_VERSION
+    _PLANNING_CALENDAR_CACHE_VERSION += 1
+    if keep_indexes and _PLANNING_CALENDAR_INDEX_VERSION >= 0:
+        _PLANNING_CALENDAR_INDEX_VERSION = _PLANNING_CALENDAR_CACHE_VERSION
+    else:
+        _PLANNING_CALENDAR_INDEX_VERSION = -1
+        _PLANNING_PHASE_INDEX.clear()
+        _PLANNING_CELL_INDEX.clear()
+
+
+def save_projects(projects):
+    """Persist projects and invalidate derived planning data by default."""
+    result = _raw_save_projects(projects)
+    invalidate_planning_calendar_cache()
+    return result
+
+
+def _rebuild_planning_calendar_indexes(projects):
+    global _PLANNING_CALENDAR_INDEX_VERSION
+    mapping = compute_schedule_map(projects)
+    _PLANNING_PHASE_INDEX.clear()
+    _PLANNING_CELL_INDEX.clear()
+    cell_cursor = {}
+    for pid, entries in mapping.items():
+        for worker, day, phase, hours, part in entries:
+            cell_key = (worker, day)
+            start_hour = cell_cursor.get(cell_key, 0)
+            entry = {
+                'pid': pid, 'phase': phase, 'part': part, 'day': day,
+                'worker': worker, 'start_hour': start_hour, 'hours': hours,
+            }
+            _PLANNING_PHASE_INDEX.setdefault((str(pid), phase, part), []).append(entry)
+            _PLANNING_CELL_INDEX.setdefault(cell_key, []).append(entry)
+            cell_cursor[cell_key] = start_hour + hours
+    _PLANNING_CALENDAR_INDEX_VERSION = _PLANNING_CALENDAR_CACHE_VERSION
+
+
+def _planning_calendar_indexes(projects):
+    if _PLANNING_CALENDAR_INDEX_VERSION != _PLANNING_CALENDAR_CACHE_VERSION:
+        _rebuild_planning_calendar_indexes(projects)
+    return _PLANNING_PHASE_INDEX, _PLANNING_CELL_INDEX
+
+
+def _phase_calendar_entries(projects, pid, phase, part):
+    phases, _ = _planning_calendar_indexes(projects)
+    return phases.get((str(pid), phase, part), [])
+
+
+def _patch_split_calendar_index(projects, pid, phase, part, worker, day, start_hour, hours):
+    """Patch only a split phase and the cells it leaves/occupies."""
+    phases, cells = _planning_calendar_indexes(projects)
+    key = (str(pid), phase, part)
+    old = phases.pop(key, [])
+    for entry in old:
+        cell_key = (entry['worker'], entry['day'])
+        cells[cell_key] = [item for item in cells.get(cell_key, []) if item is not entry]
+        if not cells[cell_key]:
+            cells.pop(cell_key, None)
+
+    new_entries = []
+    remaining = hours
+    current_day = day
+    requested_hour = start_hour or 0
+    vacations = _schedule_mod._build_vacation_map().get(worker, set())
+    limit = HOURS_LIMITS.get(worker, HOURS_PER_DAY)
+    while remaining > 0:
+        if current_day in vacations:
+            current_day = next_workday(current_day)
+            requested_hour = 0
+            continue
+        day_iso = current_day.isoformat()
+        occupied = sum(item['hours'] for item in cells.get((worker, day_iso), []))
+        slot_start = max(requested_hour, occupied)
+        free = limit - slot_start
+        if free <= 0:
+            current_day = next_workday(current_day)
+            requested_hour = 0
+            continue
+        amount = min(remaining, free)
+        entry = {'pid': pid, 'phase': phase, 'part': part, 'day': day_iso,
+                 'worker': worker, 'start_hour': slot_start, 'hours': amount}
+        new_entries.append(entry)
+        cells.setdefault((worker, day_iso), []).append(entry)
+        remaining -= amount
+        if remaining:
+            current_day = next_workday(current_day)
+            requested_hour = 0
+    phases[key] = new_entries
+    return new_entries
 UNPLANNED = _schedule_mod.UNPLANNED
 if hasattr(_schedule_mod, "phase_start_map"):
     phase_start_map = _schedule_mod.phase_start_map
@@ -1815,6 +1916,24 @@ else:
 
     def save_worker_day_hours(data):
         return {}
+
+
+def _invalidate_after_planning_save(save_func):
+    def wrapped(*args, **kwargs):
+        result = save_func(*args, **kwargs)
+        invalidate_planning_calendar_cache()
+        return result
+    return wrapped
+
+
+# These inputs participate in scheduling just as projects do.  Centralising
+# invalidation here also covers non-HTTP callers and future endpoints.
+save_vacations = _invalidate_after_planning_save(save_vacations)
+save_daily_hours = _invalidate_after_planning_save(save_daily_hours)
+save_worker_hours = _invalidate_after_planning_save(save_worker_hours)
+save_worker_day_hours = _invalidate_after_planning_save(save_worker_day_hours)
+save_inactive_workers = _invalidate_after_planning_save(save_inactive_workers)
+save_inactive_worker_dates = _invalidate_after_planning_save(save_inactive_worker_dates)
 
 KANBAN_POPUP_FIELDS = [
     'Fecha Cliente',
@@ -4760,14 +4879,9 @@ def move_phase_date(
         except Exception:
             part = None
 
-    mapping = compute_schedule_map(projects)
-    tasks = [t for t in mapping.get(pid, []) if t[2] == phase]
+    tasks = _phase_calendar_entries(projects, pid, phase, part)
     if not tasks:
         return _fail('Fase no encontrada')
-    if part is not None:
-        tasks = [t for t in tasks if t[4] == part]
-        if not tasks:
-            return _fail('Fase no encontrada')
     proj = next((p for p in projects if p['id'] == pid), None)
     if not proj:
         return _fail('Proyecto no encontrado')
@@ -5043,7 +5157,17 @@ def move_phase_date(
                 current_hour = 0
 
     if save:
-        save_projects(projects)
+        if mode == "split":
+            destination_worker = worker or tasks[0]['worker']
+            patched = _patch_split_calendar_index(
+                projects, pid, phase, part, destination_worker, sched_day,
+                sched_hour, hours,
+            )
+            _raw_save_projects(projects)
+            invalidate_planning_calendar_cache(keep_indexes=True)
+            sched_day = date.fromisoformat(patched[0]['day'])
+        else:
+            save_projects(projects)
     # Determine end of this phase for logging purposes. When ``mode`` was
     # ``push`` the values may already be available from the push calculation
     # above; otherwise compute them now.
@@ -10931,31 +11055,9 @@ def move_phase():
 
     projects = get_projects()
     original_projects = copy.deepcopy(projects)
-    before_mapping = compute_schedule_map(original_projects)
-    pid_candidates = []
-    for candidate in (pid, str(pid)):
-        if candidate not in pid_candidates:
-            pid_candidates.append(candidate)
-    try:
-        pid_int = int(pid)
-    except Exception:
-        pid_int = None
-    else:
-        for candidate in (pid_int, str(pid_int)):
-            if candidate not in pid_candidates:
-                pid_candidates.append(candidate)
-
-    def _find_phase_entry(mapping_data):
-        for key in pid_candidates:
-            entries = mapping_data.get(key)
-            if not entries:
-                continue
-            for w, d, ph, _, prt in entries:
-                if ph == phase and (part is None or prt == part):
-                    return d, w
-        return None, None
-
-    before_day, before_worker = _find_phase_entry(before_mapping)
+    before_entries = _phase_calendar_entries(projects, pid, phase, part)
+    before_day = before_entries[0]['day'] if before_entries else None
+    before_worker = before_entries[0]['worker'] if before_entries else None
     tracker_events = []
     new_day, warn, info = move_phase_date(
         projects,
@@ -10979,8 +11081,9 @@ def move_phase():
     # Revert move if the target day is already full and the phase was
     # scheduled elsewhere. This prevents the phase from jumping to the next
     # available day when the chosen cell has no remaining hours.
-    mapping = compute_schedule_map(projects)
-    actual_day, actual_worker = _find_phase_entry(mapping)
+    actual_entries = _phase_calendar_entries(projects, pid, phase, part)
+    actual_day = actual_entries[0]['day'] if actual_entries else None
+    actual_worker = actual_entries[0]['worker'] if actual_entries else None
     target_worker = worker or actual_worker or before_worker
     worker_limit = HOURS_LIMITS.get(target_worker, HOURS_PER_DAY)
     unlimited_worker = isinstance(worker_limit, (int, float)) and math.isinf(float(worker_limit))
