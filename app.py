@@ -52,8 +52,8 @@ _spec.loader.exec_module(_schedule_mod)
 sys.modules['schedule'] = _schedule_mod
 
 # Expose schedule helpers as module-level names
-load_projects = _schedule_mod.load_projects
-save_projects = _schedule_mod.save_projects
+_load_projects_from_storage = _schedule_mod.load_projects
+_save_projects_to_storage = _schedule_mod.save_projects
 schedule_projects = _schedule_mod.schedule_projects
 load_dismissed = _schedule_mod.load_dismissed
 save_dismissed = _schedule_mod.save_dismissed
@@ -103,6 +103,69 @@ HOURS_PER_DAY = _schedule_mod.HOURS_PER_DAY
 DEFAULT_FRIDAY_HOURS = getattr(_schedule_mod, "DEFAULT_FRIDAY_HOURS", 7)
 HOURS_LIMITS = _schedule_mod.HOURS_LIMITS
 next_workday = _schedule_mod.next_workday
+
+# The projects file and the derived planning map form one logical state.  Keep
+# their publication behind the same lock so readers can never observe a new
+# projects file together with a map derived from the previous version.
+_PLANNING_CALENDAR_CACHE_LOCK = threading.RLock()
+_PLANNING_CALENDAR_CACHE = {'version': 0, 'map': None}
+_PLANNING_CALENDAR_CACHE_PROJECTS = None
+
+
+def load_projects():
+    """Load projects without racing a planning-state publication."""
+
+    with _PLANNING_CALENDAR_CACHE_LOCK:
+        return _load_projects_from_storage()
+
+
+def invalidate_planning_calendar_cache():
+    """Publish a new projects version with no precomputed planning map."""
+
+    global _PLANNING_CALENDAR_CACHE_PROJECTS
+    with _PLANNING_CALENDAR_CACHE_LOCK:
+        _PLANNING_CALENDAR_CACHE['version'] += 1
+        _PLANNING_CALENDAR_CACHE['map'] = None
+        _PLANNING_CALENDAR_CACHE_PROJECTS = None
+        return _PLANNING_CALENDAR_CACHE['version']
+
+
+def save_projects(projects, *, planning_map=None):
+    """Persist projects and atomically publish their derived planning state.
+
+    ``planning_map`` is an explicit fast path for planning operations which
+    have already computed the post-change map.  Other callers invalidate the
+    cached map while still advancing the version exactly once.
+    """
+
+    global _PLANNING_CALENDAR_CACHE_PROJECTS
+    with _PLANNING_CALENDAR_CACHE_LOCK:
+        result = _save_projects_to_storage(projects)
+        _PLANNING_CALENDAR_CACHE['version'] += 1
+        _PLANNING_CALENDAR_CACHE['map'] = (
+            copy.deepcopy(planning_map) if planning_map is not None else None
+        )
+        _PLANNING_CALENDAR_CACHE_PROJECTS = (
+            copy.deepcopy(projects) if planning_map is not None else None
+        )
+        return result
+
+
+def get_planning_calendar_map(projects):
+    """Return the map for the current projects version, rebuilding if needed."""
+
+    global _PLANNING_CALENDAR_CACHE_PROJECTS
+    with _PLANNING_CALENDAR_CACHE_LOCK:
+        cached = _PLANNING_CALENDAR_CACHE['map']
+        if cached is None or _PLANNING_CALENDAR_CACHE_PROJECTS != projects:
+            cached = compute_schedule_map(projects)
+            # Only publish reconstructions for the projects state currently on
+            # disk.  An older request must not replace a newer cached map.
+            current_projects = _load_projects_from_storage()
+            if current_projects == projects:
+                _PLANNING_CALENDAR_CACHE['map'] = copy.deepcopy(cached)
+                _PLANNING_CALENDAR_CACHE_PROJECTS = copy.deepcopy(projects)
+        return copy.deepcopy(cached)
 DEADLINE_MSG = 'Fecha cliente soprepasada.'
 CLIENT_DEADLINE_MSG = 'FECHA TOPE SOBREPASADA.'
 READY_TO_ARCHIVE_TASK_BACKGROUND = '#D9D9D9'
@@ -10931,7 +10994,7 @@ def move_phase():
 
     projects = get_projects()
     original_projects = copy.deepcopy(projects)
-    before_mapping = compute_schedule_map(original_projects)
+    before_mapping = get_planning_calendar_map(original_projects)
     pid_candidates = []
     for candidate in (pid, str(pid)):
         if candidate not in pid_candidates:
@@ -10970,6 +11033,7 @@ def move_phase():
         skip_block=skip_block,
         start_hour=start_hour,
         track=tracker_events,
+        save=False,
     )
     if new_day is None:
         if isinstance(warn, dict):
@@ -10993,8 +11057,13 @@ def move_phase():
 
     if actual_day != date_str and not (unlimited_worker or office_worker):
         projects[:] = original_projects
-        save_projects(projects)
         return jsonify({'error': 'Jornada ocupada'}), 409
+
+    # Persist and publish the already computed post-move map as one state
+    # transition.  save_projects performs the sole version increment; a
+    # separate invalidation here would incorrectly advance it twice and leave
+    # the cache empty.
+    save_projects(projects, planning_map=mapping)
 
     if actual_worker == UNPLANNED and manual_flag:
         manual_bucket_add(pid, phase, part, manual_position)
