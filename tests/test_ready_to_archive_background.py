@@ -12,7 +12,7 @@ def test_ready_to_archive_webhook_persists_column_before_get_projects(monkeypatc
     cards_file.write_text(json.dumps([{
         'timestamp': '2026-07-28T09:00:00Z',
         'card': {
-            'taskid': 'card-123',
+            'taskid': 123,
             'lanename': 'Acero al Carbono',
             'columnname': 'En producción',
         },
@@ -22,7 +22,9 @@ def test_ready_to_archive_webhook_persists_column_before_get_projects(monkeypatc
         'id': 'project-123',
         'name': 'OF 123',
         'source': 'api',
-        'kanban_id': 'card-123',
+        # Kanbanize movement payloads commonly use a number while projects
+        # loaded from JSON keep the same identifier as text.
+        'kanban_id': '123',
         'kanban_column': 'En producción',
         'phases': {},
         'assigned': {},
@@ -37,7 +39,7 @@ def test_ready_to_archive_webhook_persists_column_before_get_projects(monkeypatc
     response = planner_app.app.test_client().post('/kanbanize-webhook', json={
         'timestamp': '2026-07-29T10:30:00Z',
         'card': {
-            'taskid': 'card-123',
+            'taskid': 123,
             'lanename': 'Acero al Carbono',
             'column': 'Ready to Archive',
         },
@@ -52,6 +54,18 @@ def test_ready_to_archive_webhook_persists_column_before_get_projects(monkeypatc
 
     refreshed_project = planner_app.get_projects()[0]
     assert refreshed_project['kanban_column'] == 'Ready to Archive'
+
+    task = {'pid': 'project-123', 'phase': 'montar', 'hours': 1}
+    monkeypatch.setattr(planner_app, 'inject_archived_tasks', lambda base: ([], {}))
+    monkeypatch.setattr(
+        planner_app,
+        'schedule_projects',
+        lambda current, base_schedule=None: ({'Mikel': {'2026-07-30': [task]}}, []),
+    )
+    schedule, *_ = planner_app.build_schedule_with_archived([refreshed_project])
+    rendered_task = schedule['Mikel']['2026-07-30'][0]
+    assert rendered_task['archived_shadow'] is True
+    assert rendered_task['frozen'] is True
 
 
 def test_ready_to_archive_project_tasks_are_marked_gray(monkeypatch):

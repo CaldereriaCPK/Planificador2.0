@@ -11761,8 +11761,12 @@ def kanbanize_webhook():
         projects = load_projects()
         pid = None
         matched_project = None
+        cid_key = _normalize_card_id(cid)
         for p in projects:
-            if p.get('kanban_id') == cid or (name_candidates and p.get('name') in name_candidates):
+            project_kanban_key = _normalize_card_id(p.get('kanban_id'))
+            id_matches = bool(cid_key and project_kanban_key == cid_key)
+            name_matches = bool(name_candidates and p.get('name') in name_candidates)
+            if id_matches or name_matches:
                 if cid and not p.get('kanban_id'):
                     p['kanban_id'] = cid
                 pid = p['id']
