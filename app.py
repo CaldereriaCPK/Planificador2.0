@@ -34,6 +34,7 @@ import random
 from queue import Queue
 import threading
 import math
+from move_store import MoveStore
 
 from localtime import local_today, local_now
 
@@ -1151,6 +1152,7 @@ KANBAN_CARDS_FILE = os.path.join(DATA_DIR, 'kanban_cards.json')
 KANBAN_PREFILL_FILE = os.path.join(DATA_DIR, 'kanban_prefill.json')
 KANBAN_COLUMN_COLORS_FILE = os.path.join(DATA_DIR, 'kanban_column_colors.json')
 TRACKER_FILE = os.path.join(DATA_DIR, 'tracker.json')
+MOVE_STORE = MoveStore(DATA_DIR)
 ARCHIVED_CALENDAR_FILE = os.path.join(DATA_DIR, 'archived_calendar.json')
 PLANNER_SETTINGS_FILE = os.path.join(DATA_DIR, 'planner_settings.json')
 TRANSPORT_OPTIONS_FILE = os.path.join(DATA_DIR, 'transport_options.json')
@@ -2430,7 +2432,7 @@ def event_stream():
 @app.route('/complete_last_movement')
 def complete_last_movement():
     try:
-        latest = os.path.getmtime(_schedule_mod.PHASE_HISTORY_FILE)
+        latest = os.path.getmtime(MOVE_STORE.path)
     except FileNotFoundError:
         latest = 0
     return jsonify({'timestamp': latest})
@@ -2448,6 +2450,7 @@ def complete_last_update():
         _schedule_mod.WORKER_DAY_HOURS_FILE,
         _schedule_mod.MANUAL_UNPLANNED_FILE,
         _schedule_mod.PHASE_HISTORY_FILE,
+        MOVE_STORE.path,
     ]
     latest = 0
     for path in files:
@@ -2459,13 +2462,7 @@ def complete_last_update():
 
 
 def load_tracker():
-    if os.path.exists(TRACKER_FILE):
-        try:
-            with open(TRACKER_FILE, 'r') as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
+    return MOVE_STORE.tracker()
 
 
 def save_tracker(data):
@@ -10970,6 +10967,7 @@ def move_phase():
         skip_block=skip_block,
         start_hour=start_hour,
         track=tracker_events,
+        save=False,
     )
     if new_day is None:
         if isinstance(warn, dict):
@@ -10993,7 +10991,6 @@ def move_phase():
 
     if actual_day != date_str and not (unlimited_worker or office_worker):
         projects[:] = original_projects
-        save_projects(projects)
         return jsonify({'error': 'Jornada ocupada'}), 409
 
     if actual_worker == UNPLANNED and manual_flag:
@@ -11014,33 +11011,34 @@ def move_phase():
                 'phase': ev['phase'],
             })
     movement_timestamp = local_now().isoformat()
-    logs = load_tracker()
-    logs.append({
+    tracker_entry = {
         'timestamp': movement_timestamp,
         'project': proj.get('name', ''),
         'client': proj.get('client', ''),
         'phase': phase,
         'reason': reason,
         'affected': affected_entries,
-    })
-    save_tracker(logs)
+    }
 
     previous_worker = (before_worker or '').strip() or UNPLANNED
     current_worker = (actual_worker or '').strip() or UNPLANNED
+    history_entry = None
     if before_day != actual_day or previous_worker != current_worker:
-        history = load_phase_history()
-        key = phase_history_key(pid, phase, part)
-        entry = {
+        history_entry = {
             'timestamp': movement_timestamp,
             'from_day': before_day,
             'to_day': actual_day,
             'from_worker': previous_worker,
             'to_worker': current_worker,
         }
-        history.setdefault(key, []).append(entry)
-        save_phase_history(history)
+    MOVE_STORE.persist_move(
+        _schedule_mod.PROJECTS_FILE, projects, tracker_entry, pid,
+        history_entry, phase, part,
+    )
 
-    blockers = material_blockers_for_project(projects, pid, new_day)
+    # Material enrichment only needs the moved project; avoid scheduling and
+    # linking every project again on this request's secondary read path.
+    blockers = material_blockers_for_project([proj], pid, new_day)
 
     resp = {
         'date': new_day,
@@ -11065,9 +11063,7 @@ def phase_history():
         part_value = None
     else:
         part_value = part
-    history = load_phase_history()
-    key = phase_history_key(pid, phase, part_value)
-    entries = history.get(key, []) if isinstance(history, dict) else []
+    entries = MOVE_STORE.phase_history(pid, phase, part_value)
     cleaned = []
     for item in entries:
         if not isinstance(item, dict):

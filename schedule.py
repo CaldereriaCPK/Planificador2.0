@@ -196,6 +196,28 @@ def _normalize_display_key(value):
     return ''.join(ch for ch in decomposed if unicodedata.category(ch) != 'Mn')
 
 
+def _canonical_worker_name(value):
+    """Return the configured spelling for a worker, repairing UTF-8 mojibake.
+
+    Some Windows installations previously read the UTF-8 projects file using
+    cp1252.  Retain a defensive repair so already-corrupted assignments do not
+    crash schedule generation while they are being rewritten correctly.
+    """
+    if not isinstance(value, str):
+        return value
+    candidates = [value]
+    try:
+        repaired = value.encode('latin-1').decode('utf-8')
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        repaired = value
+    if repaired != value:
+        candidates.append(repaired)
+    for candidate in candidates:
+        if candidate in WORKERS:
+            return candidate
+    return repaired
+
+
 def _parse_phase_deadline(value):
     if value is None:
         return None
@@ -718,7 +740,7 @@ def set_worker_order(order):
 
 def load_projects():
     if os.path.exists(PROJECTS_FILE):
-        with open(PROJECTS_FILE, 'r') as f:
+        with open(PROJECTS_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
         filtered = [p for p in data if p.get('phases')]
         if len(filtered) != len(data):
@@ -729,7 +751,7 @@ def load_projects():
 
 def save_projects(projects):
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(PROJECTS_FILE, 'w') as f:
+    with open(PROJECTS_FILE, 'w', encoding='utf-8') as f:
         json.dump(projects, f)
 
 
@@ -983,6 +1005,7 @@ def schedule_projects(projects, base_schedule=None):
     worker_schedule = {w: {} for w in WORKERS}
 
     for worker, days in (base_schedule or {}).items():
+        worker = _canonical_worker_name(worker)
         target_days = worker_schedule.setdefault(worker, {})
         for day, tasks in (days or {}).items():
             if not isinstance(tasks, list):
@@ -1037,6 +1060,9 @@ def schedule_projects(projects, base_schedule=None):
                 day = seg.get('day')
                 if not worker or not day:
                     continue
+                worker = _canonical_worker_name(worker)
+                if worker != seg.get('worker'):
+                    seg['worker'] = worker
                 try:
                     day_obj = date.fromisoformat(day)
                     day_key = day_obj.isoformat()
@@ -1157,6 +1183,11 @@ def schedule_projects(projects, base_schedule=None):
                 worker = assigned.get(phase) if planned else UNPLANNED
                 if not worker:
                     worker = UNPLANNED
+                canonical_worker = _canonical_worker_name(worker)
+                if canonical_worker != worker:
+                    worker = canonical_worker
+                    assigned[phase] = worker
+                worker_schedule.setdefault(worker, {})
                 current, hour, end_date, seg_start, seg_start_hour = assign_pedidos(
                     worker_schedule[worker],
                     current,
@@ -1197,6 +1228,15 @@ def schedule_projects(projects, base_schedule=None):
                                 seg_workers[idx] = UNPLANNED
                             else:
                                 assigned[phase] = UNPLANNED
+
+                    canonical_worker = _canonical_worker_name(worker)
+                    if canonical_worker != worker:
+                        worker = canonical_worker
+                        if seg_workers and idx < len(seg_workers):
+                            seg_workers[idx] = worker
+                        else:
+                            assigned[phase] = worker
+                    worker_schedule.setdefault(worker, {})
 
                     override = None
                     hour_override = None
