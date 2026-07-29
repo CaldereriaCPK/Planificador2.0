@@ -11568,8 +11568,16 @@ def kanbanize_webhook():
         if now_monotonic - fetch_timestamp < KANBAN_CARD_FETCH_COOLDOWN_SECONDS:
             recently_fetched = True
 
-    lane = pick(card, 'lanename', 'laneName', 'lane')
-    column = pick(card, 'columnname', 'columnName', 'column')
+    lane = (
+        pick(payload_card, 'lanename', 'laneName', 'lane')
+        if lane_supplied
+        else pick(card, 'lanename', 'laneName', 'lane')
+    )
+    column = (
+        pick(payload_card, 'columnname', 'columnName', 'column')
+        if column_supplied
+        else pick(card, 'columnname', 'columnName', 'column')
+    )
 
     prev_lane_norm = norm(prev_lane)
     prev_column_norm = norm(prev_column)
@@ -11622,8 +11630,16 @@ def kanbanize_webhook():
                 cache_snapshot,
             )
 
-    lane = pick(card, 'lanename', 'laneName', 'lane')
-    column = pick(card, 'columnname', 'columnName', 'column')
+    lane = (
+        pick(payload_card, 'lanename', 'laneName', 'lane')
+        if lane_supplied
+        else pick(card, 'lanename', 'laneName', 'lane')
+    )
+    column = (
+        pick(payload_card, 'columnname', 'columnName', 'column')
+        if column_supplied
+        else pick(card, 'columnname', 'columnName', 'column')
+    )
 
     if not column_supplied and not card_refreshed and prev_column:
         column = prev_column
@@ -11641,6 +11657,26 @@ def kanbanize_webhook():
         clean_column = str(column).strip()
     else:
         clean_column = ''
+
+    def save_card_snapshot():
+        """Persist the webhook's current card before any early return."""
+        snapshot = dict(card)
+        entry_last_column = clean_column or (
+            prev_column.strip() if isinstance(prev_column, str) else prev_column
+        )
+        if clean_column:
+            # Store every spelling consumed by the different Kanban readers.
+            # Movement payloads do not necessarily provide all three variants.
+            snapshot['columnname'] = clean_column
+            snapshot['columnName'] = clean_column
+            snapshot['column'] = clean_column
+        entry = {'timestamp': payload_timestamp, 'card': snapshot}
+        if entry_last_column:
+            entry['last_column'] = str(entry_last_column).strip()
+        with KANBAN_CARDS_LOCK:
+            cards = load_kanban_cards()
+            cards.append(entry)
+            save_kanban_cards(cards)
 
     if tags_supplied or card_refreshed:
         card_tags = _extract_card_tags(card)
@@ -11721,11 +11757,16 @@ def kanbanize_webhook():
         )
 
     if column_norm == 'ready to archive':
+        save_card_snapshot()
         projects = load_projects()
         pid = None
         matched_project = None
+        cid_key = _normalize_card_id(cid)
         for p in projects:
-            if p.get('kanban_id') == cid or (name_candidates and p.get('name') in name_candidates):
+            project_kanban_key = _normalize_card_id(p.get('kanban_id'))
+            id_matches = bool(cid_key and project_kanban_key == cid_key)
+            name_matches = bool(name_candidates and p.get('name') in name_candidates)
+            if id_matches or name_matches:
                 if cid and not p.get('kanban_id'):
                     p['kanban_id'] = cid
                 pid = p['id']
@@ -12099,14 +12140,7 @@ def kanbanize_webhook():
             removed_project = remove_project_and_preserve_schedule(projects, existing['id'])
             if removed_project:
                 save_projects(projects)
-        with KANBAN_CARDS_LOCK:
-            cards = load_kanban_cards()
-            entry_last_column = clean_column or prev_clean_column
-            entry = {'timestamp': payload_timestamp, 'card': card}
-            if entry_last_column:
-                entry['last_column'] = entry_last_column
-            cards.append(entry)
-            save_kanban_cards(cards)
+        save_card_snapshot()
         broadcast_event({"type": "kanban_update"})
         return jsonify({"mensaje": "Tarjeta ignorada (tag No planificador)"}), 200
 
@@ -12228,14 +12262,7 @@ def kanbanize_webhook():
             save_projects(projects)
     else:
         if column_norm == 'pedidos pendiente generar of':
-            with KANBAN_CARDS_LOCK:
-                cards = load_kanban_cards()
-                entry_last_column = clean_column or prev_clean_column
-                entry = {'timestamp': payload_timestamp, 'card': card}
-                if entry_last_column:
-                    entry['last_column'] = entry_last_column
-                cards.append(entry)
-                save_kanban_cards(cards)
+            save_card_snapshot()
             broadcast_event({"type": "kanban_update"})
             return jsonify({"mensaje": "Tarjeta ignorada (columna Pedidos pendiente generar OF)"}), 200
         project = {
@@ -12267,14 +12294,7 @@ def kanbanize_webhook():
         projects.append(project)
         save_projects(projects)
 
-    with KANBAN_CARDS_LOCK:
-        cards = load_kanban_cards()
-        entry_last_column = clean_column or prev_clean_column
-        entry = {'timestamp': payload_timestamp, 'card': card}
-        if entry_last_column:
-            entry['last_column'] = entry_last_column
-        cards.append(entry)
-        save_kanban_cards(cards)
+    save_card_snapshot()
 
     if not existing:
         extras = load_extra_conflicts()
