@@ -63,6 +63,21 @@ class MovePersistencePerformanceTest(unittest.TestCase):
             self.assertEqual(store.tracker(), [])
             self.assertEqual(store.phase_history("p1", "montar"), [])
 
+    def test_projects_json_is_safe_for_windows_ansi_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            projects_path = os.path.join(directory, "projects.json")
+            store = MoveStore(directory)
+            projects = [{"id": "p1", "assigned": {"dibujo": "Oficina técnica."}}]
+            event = {"timestamp": "2026-07-28T10:00:00", "phase": "dibujo"}
+
+            store.persist_move(projects_path, projects, event, "p1")
+
+            # This emulates Python's legacy Windows cp1252 default.  An
+            # ASCII-only JSON representation must still decode the accent.
+            with open(projects_path, encoding="cp1252") as fh:
+                loaded = json.load(fh)
+            self.assertEqual(loaded[0]["assigned"]["dibujo"], "Oficina técnica.")
+
 
 if __name__ == "__main__":
     unittest.main()

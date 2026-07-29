@@ -126,7 +126,12 @@ class MoveStore:
             fd, tmp = tempfile.mkstemp(prefix=".projects-", dir=directory, text=True)
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    json.dump(projects, fh, ensure_ascii=False)
+                    # Keep the compatibility JSON ASCII-only.  ``schedule.py``
+                    # has historically been deployed on Windows and older
+                    # versions opened this file with the active ANSI codepage;
+                    # literal UTF-8 names (for example "Oficina técnica") were
+                    # consequently decoded as "Oficina tÃ©cnica".
+                    json.dump(projects, fh, ensure_ascii=True)
                     fh.flush()
                     os.fsync(fh.fileno())
                 os.replace(tmp, projects_file)
